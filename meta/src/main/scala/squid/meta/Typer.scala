@@ -36,11 +36,7 @@ object Typer {
             }.headOption.getOrElse(
               throw new RuntimeException(s"Could not find '$cf' in tables")
             )
-            RetVal(
-              name.getOrElse(fieldName),
-              Meta.getClassFromColumn(column),
-              column.nullable
-            )
+            RetVal(name.getOrElse(fieldName), column.typeName, column.nullable)
           case QualField(Some(fieldPrefix), fieldName) =>
             throw new RuntimeException("Not implemented")
         }
@@ -49,7 +45,7 @@ object Typer {
     }
   }
 
-  case class RetVal(name: String, typ: String, nullable: Boolean)
+  case class RetVal(name: String, typeName: String, nullable: Boolean)
 }
 
 object ASTHelper {

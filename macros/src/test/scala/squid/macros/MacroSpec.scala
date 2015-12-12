@@ -1,8 +1,9 @@
 package squid.macros
 
-import java.sql.{DriverManager, Connection}
+import java.sql.{Connection, DriverManager}
 
 import org.specs2.Specification
+
 import squid.meta.DBUtils
 
 /**

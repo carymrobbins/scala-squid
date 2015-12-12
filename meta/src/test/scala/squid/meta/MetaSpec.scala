@@ -42,8 +42,8 @@ class MetaSpec extends Specification { def is = s2"""
       val ast = PGParser.unsafeParse("select baz, quux from foo.bar")
       val returnValues = Typer.getReturnValues(ast)
       returnValues === List(
-        Typer.RetVal("baz", classOf[Long], nullable = false),
-        Typer.RetVal("quux", classOf[String], nullable = true)
+        Typer.RetVal("baz", "int4", nullable = false),
+        Typer.RetVal("quux", "text", nullable = true)
       )
     }
   }

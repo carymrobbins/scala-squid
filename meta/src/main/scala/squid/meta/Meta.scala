@@ -2,6 +2,7 @@ package squid.meta
 
 import java.sql.{Types, Connection, DatabaseMetaData, ResultSet}
 
+import scala.annotation.StaticAnnotation
 import scala.collection.mutable
 
 import DBImplicits._
