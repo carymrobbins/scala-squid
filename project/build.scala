@@ -44,11 +44,14 @@ object build extends Build {
     )
   ).dependsOn(parser)
 
-  lazy val macros = project.settings(buildSettings: _*).dependsOn(parser, meta)
+  lazy val macros = project.settings(buildSettings: _*)
+    .dependsOn(parser, meta, metaTest)
 
   lazy val core = project.settings(buildSettings: _*).dependsOn(macros)
 
   // Common dependencies
+
+  val metaTest = meta % "test->test"
 
   val postgres = "org.postgresql" % "postgresql" % "9.4-1201-jdbc41"
 }

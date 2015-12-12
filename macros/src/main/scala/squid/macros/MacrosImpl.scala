@@ -15,13 +15,6 @@ class Query extends StaticAnnotation {
   def macroTransform(annottees: Any*): Any = macro Query.impl
 }
 
-trait ConnectionInfo {
-  val jdbcDriver: String
-  val jdbcUrl: String
-  val jdbcUser: String
-  val jdbcPassword: String
-}
-
 object Query {
   def impl(c: whitebox.Context)(annottees: c.Expr[Any]*): c.universe.Tree = {
     import c.universe._
@@ -77,9 +70,7 @@ object Query {
     }
 
     annottees match {
-      // @Query case class Foo() { ... } (replaced with @Query object Foo { .. })
-      //case List(Expr(ClassDef(mods, name, List(), template))) =>
-
+      // @Query object Foo { .. }
       case List(Expr(ModuleDef(_, name, template))) =>
         template.body match {
           case List(_: DefDef, Literal(Constant(sql: String))) =>
@@ -116,11 +107,14 @@ object Query {
                   Row(..$rsToRowArgs)
                 }
 
-                def fetch()(implicit c: Connection): Result = {
+                def fetch()(implicit c: java.sql.Connection): Result = {
                   squid.meta.DBUtils.executeQueryStream(sql, rsToRow)
                 }
               }
             """
+
+          // TODO @Query class Foo() { ... }
+          //case List(Expr(ClassDef(mods, name, List(), template))) =>
 
           case _ =>
             c.abort(c.enclosingPosition, "Invalid @Query class body")
