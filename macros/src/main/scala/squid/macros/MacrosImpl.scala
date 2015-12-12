@@ -31,6 +31,7 @@ object Query {
 
     case class TypeRegistryInfo(method: TermName, returnType: Type)
 
+    // Turn this into a Map
     def lookupTypeRegistryInfo(typeName: String): TypeRegistryInfo = {
       typ.baseClasses.foreach { bc =>
         bc.asClass.toType.decls.foreach { d =>
@@ -76,10 +77,10 @@ object Query {
     }
 
     annottees match {
-      case List(Expr(ClassDef(mods, name, List(), template))) =>
-        if (mods != Modifiers(Flag.CASE)) {
-          c.abort(c.enclosingPosition, "Only case classes are supported")
-        }
+      // @Query case class Foo() { ... } (replaced with @Query object Foo { .. })
+      //case List(Expr(ClassDef(mods, name, List(), template))) =>
+
+      case List(Expr(ModuleDef(_, name, template))) =>
         template.body match {
           case List(_: DefDef, Literal(Constant(sql: String))) =>
             val ast = PGParser.parse(sql).fold(
@@ -104,7 +105,7 @@ object Query {
             }
 
             q"""
-              case class $name() {
+              object $name {
                 case class Row(..$rowCtorArgs)
 
                 type Result = Stream[Row]
@@ -115,7 +116,7 @@ object Query {
                   Row(..$rsToRowArgs)
                 }
 
-                def execute()(implicit c: Connection): Result = {
+                def fetch()(implicit c: Connection): Result = {
                   squid.meta.DBUtils.executeQueryStream(sql, rsToRow)
                 }
               }
@@ -126,7 +127,7 @@ object Query {
         }
 
       case _ =>
-        c.abort(c.enclosingPosition, "Invalid @Query class")
+        c.abort(c.enclosingPosition, s"Invalid @Query class: ${showRaw(annottees)}")
     }
   }
 
