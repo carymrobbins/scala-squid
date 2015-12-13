@@ -18,7 +18,6 @@ class MacroSpec extends DBSpecBase { def is = s2"""
       Bars.Row(2, None)
     )
   }
-
 }
 
 @Query object Bars {"""
@@ -27,10 +26,9 @@ class MacroSpec extends DBSpecBase { def is = s2"""
   order by id
 """}
 
-// TODO
-// @Query class BarsByQuux(quux: String) {s"""
-//   select id, quux
-//   from foo.bar
-//   where quux = $quux
-//   order by id
-// """}
+//@Query class BarsByQuux(quux: Option[String]) {s"""
+//  select id, quux
+//  from foo.bar
+//  where quux = $quux
+//  order by id
+//"""}

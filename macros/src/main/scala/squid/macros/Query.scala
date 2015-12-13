@@ -1,6 +1,6 @@
 package squid.macros
 
-import java.sql.{ResultSet, DriverManager}
+import java.sql.DriverManager
 
 import scala.annotation.StaticAnnotation
 import scala.language.experimental.macros
@@ -8,7 +8,7 @@ import scala.reflect.macros.whitebox
 
 import com.typesafe.config.ConfigFactory
 
-import squid.meta.{TableMetaData, Typer}
+import squid.meta.{RegisterType, TableMetaData, Typer}
 import squid.parser.PGParser
 
 class Query extends StaticAnnotation {
@@ -113,12 +113,16 @@ object Query {
               }
             """
 
-          // TODO @Query class Foo() { ... }
-          //case List(Expr(ClassDef(mods, name, List(), template))) =>
-
           case _ =>
             c.abort(c.enclosingPosition, "Invalid @Query class body")
         }
+
+      // @Query class Foo(...) { ... }
+      case List(Expr(ClassDef(mods, name, List(), template))) =>
+        println("##################")
+        println(showRaw(template.body))
+        println("##################")
+        c.abort(c.enclosingPosition, "INCOMPLETE")
 
       case _ =>
         c.abort(c.enclosingPosition, s"Invalid @Query class: ${showRaw(annottees)}")
@@ -148,15 +152,3 @@ object Query {
     lazy val typeRegistryName = c.getString("squid.typeRegistry")
   }
 }
-
-case class RegisterType(typeName: String) extends StaticAnnotation
-
-trait BaseTypeRegistry {
-  @RegisterType("int4")
-  def toInt4(rs: ResultSet, index: Int): Long = rs.getLong(index)
-
-  @RegisterType("text")
-  def toText(rs: ResultSet, index: Int): String = rs.getString(index)
-}
-
-object TypeRegistry extends BaseTypeRegistry
