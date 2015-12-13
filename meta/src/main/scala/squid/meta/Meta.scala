@@ -1,11 +1,6 @@
 package squid.meta
 
-import java.sql.{Types, Connection, DatabaseMetaData, ResultSet}
-
-import scala.annotation.StaticAnnotation
-import scala.collection.mutable
-
-import DBImplicits._
+import java.sql.{Connection, DatabaseMetaData, ResultSet}
 
 /**
   * TODO
@@ -14,18 +9,18 @@ object Meta {
   def getTables
       (catalog: Option[String], schemaPattern: Option[String])
       (implicit c: Connection): List[Table] = {
-    c.getMetaData.getTables(catalog.orNull, schemaPattern.orNull, null, null).map(
-      Table.unsafeFromResultSet
-    ).toList
+    DBUtils.streamResultSet(
+      c.getMetaData.getTables(catalog.orNull, schemaPattern.orNull, null, null)
+    ).map(Table.unsafeFromResultSet).toList
   }
 
   def getColumns
       (catalog: Option[String], schemaPattern: Option[String], tablePattern: String)
       (implicit c: Connection)
       : List[Column] = {
-    c.getMetaData.getColumns(catalog.orNull, schemaPattern.orNull, tablePattern, null).map(
-      Column.unsafeFromResultSet
-    ).toList
+    DBUtils.streamResultSet(
+      c.getMetaData.getColumns(catalog.orNull, schemaPattern.orNull, tablePattern, null)
+    ).map(Column.unsafeFromResultSet).toList
   }
 
   case class Table(

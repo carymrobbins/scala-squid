@@ -61,68 +61,149 @@ object Query {
       }
     }
 
-    // TODO: This sucks, we need some sort of typeclass describing the logic
-    // instead of building the method call from strings.
-    def buildResultSetColumnGetter(rv: Typer.RetVal, rsParam: TermName, index: Int): Tree = {
+    /** Returns the SQL string and the list of parameter names */
+    def findSQL(template: Template): (String, List[TermName]) = {
+      template.body.view.flatMap {
+        case Literal(Constant(s: String)) => Some((s, Nil))
+        case t => extractSQLFromStringContext(t)
+      }.headOption.getOrElse {
+        c.abort(c.enclosingPosition, "Missing SQL query")
+      }
+    }
+
+    /**
+      * If the provided Tree is a StringContext, return the SQL and parameter names.
+      * Note that the SQL will now have $1 parameters in place of the interpolated values.
+      */
+    def extractSQLFromStringContext(t: Tree): Option[(String, List[TermName])] = {
+      Some(t).collect {
+        case Apply(Select(Apply(Ident(TermName("StringContext")), parts), TermName("s")), params) =>
+          // Inject the parameter tokens.
+          val sql = parts.map {
+            case Literal(Constant(part: String)) => part
+            case other => c.abort(c.enclosingPosition, s"Invalid StringContext part: $other")
+          }.mkString("?")
+
+          val termNames = params.map {
+            case Ident(termName: TermName) => termName
+            case other => c.abort(c.enclosingPosition, s"Unsupported parameter: $other")
+          }
+          (sql, termNames)
+      }
+    }
+
+    def getRetVals(sql: String): List[Typer.RetVal] = {
+      val ast = PGParser.parse(sql).fold(
+        err => c.abort(c.enclosingPosition, s"Error parsing SQL: $err"),
+        identity
+      )
+      Typer.getReturnValues(ast)(ConnectionFactory.tableMetaData)
+    }
+
+    def getRowCtorArgs(retVals: List[Typer.RetVal]): List[ValDef] = {
+      retVals.map(rv =>
+        ValDef(
+          Modifiers(Flag.CASEACCESSOR | Flag.PARAMACCESSOR),
+          TermName(rv.name),
+          getRetValTypeTree(rv),
+          EmptyTree
+        )
+      )
+    }
+
+    // Param for: def rsToRow(rs: ResultSet): Row
+    val rsParam = TermName("rs")
+
+    def buildResultSetColumnGetter(rv: Typer.RetVal, index: Int): Tree = {
       val info = lookupTypeRegistryInfo(rv.typeName)
       val baseGetter = q"$mod.${info.method}($rsParam, $index)"
       if (rv.nullable) q"Option($baseGetter)" else baseGetter
     }
 
+    def getRsToRowArgs(retVals: List[Typer.RetVal]): List[Tree] = {
+      retVals.zipWithIndex.map { case (rv, i) =>
+        buildResultSetColumnGetter(rv, i + 1)
+      }
+    }
+
     annottees match {
       // @Query object Foo { .. }
       case List(Expr(ModuleDef(_, name, template))) =>
-        template.body match {
-          case List(_: DefDef, Literal(Constant(sql: String))) =>
-            val ast = PGParser.parse(sql).fold(
-              err => c.abort(c.enclosingPosition, s"Error parsing SQL: $err"),
-              identity
-            )
-            val retVals = Typer.getReturnValues(ast)(ConnectionFactory.tableMetaData)
+        val (sql, params) = findSQL(template)
+        if (params.nonEmpty) {
+          c.abort(c.enclosingPosition, s"Params not defined: $params")
+        }
+        val retVals = getRetVals(sql)
+        val rowCtorArgs = getRowCtorArgs(retVals)
+        val rsToRowArgs = getRsToRowArgs(retVals)
 
-            val rowCtorArgs = retVals.map(rv =>
-              ValDef(
-                Modifiers(Flag.CASEACCESSOR | Flag.PARAMACCESSOR),
-                TermName(rv.name),
-                getRetValTypeTree(rv),
-                EmptyTree
-              )
-            )
+        q"""
+          object $name {
+            case class Row(..$rowCtorArgs)
+            type Result = Stream[Row]
+            val sql = $sql
 
-            val rs = TermName("rs")
-
-            val rsToRowArgs = retVals.zipWithIndex.map { case (rv, i) =>
-              buildResultSetColumnGetter(rv, rs, i + 1)
+            def rsToRow($rsParam: java.sql.ResultSet): Row = {
+              Row(..$rsToRowArgs)
             }
 
-            q"""
-              object $name {
-                case class Row(..$rowCtorArgs)
-
-                type Result = Stream[Row]
-
-                val sql = $sql
-
-                def rsToRow($rs: java.sql.ResultSet): Row = {
-                  Row(..$rsToRowArgs)
-                }
-
-                def fetch()(implicit c: java.sql.Connection): Result = {
-                  squid.meta.DBUtils.executeQueryStream(sql, rsToRow)
-                }
-              }
-            """
-
-          case _ =>
-            c.abort(c.enclosingPosition, "Invalid @Query class body")
-        }
+            def fetch()(implicit c: java.sql.Connection): Result = {
+              squid.meta.DBUtils.executeQueryStream(sql, rsToRow)
+            }
+          }
+        """
 
       // @Query class Foo(...) { ... }
       case List(Expr(ClassDef(mods, name, List(), template))) =>
-        println("##################")
-        println(showRaw(template.body))
-        println("##################")
-        c.abort(c.enclosingPosition, "INCOMPLETE")
+        // First ValDefs are the class constructor args.
+        val valDefs = template.body.view.map {
+          case v: ValDef => Some(v)
+          case _ => None
+        }.takeWhile(_.isDefined).map(_.get).toList
+
+        val applyParams = valDefs.map {
+          case ValDef(_, valName, valType, _) =>
+            ValDef(
+              Modifiers(Flag.PARAM),
+              valName,
+              valType,
+              EmptyTree
+            )
+        }
+
+        val objName = name.toTermName
+        val classCtorArgs = applyParams.map(_.name)
+        val (sql, params) = findSQL(template)
+        val retVals = getRetVals(sql)
+        val rowCtorArgs = getRowCtorArgs(retVals)
+        val rsToRowArgs = getRsToRowArgs(retVals)
+
+        val setStatementsCode = params.zipWithIndex.map { case (p, i) =>
+          q""" squid.meta.StatementParam.set(st, ${i + 1}, $p) """
+        }
+
+        q"""
+          object $objName {
+            case class Row(..$rowCtorArgs)
+            type Result = Stream[Row]
+            val sql = $sql
+
+            def rsToRow($rsParam: java.sql.ResultSet): Row = {
+              Row(..$rsToRowArgs)
+            }
+
+            def apply(..$applyParams): $name = new $name(..$classCtorArgs)
+          }
+
+          class $name(..$valDefs) {
+            def fetch()(implicit c: java.sql.Connection): $objName.Result = {
+              val st = c.prepareStatement($objName.sql)
+              $setStatementsCode
+              val rs = st.executeQuery()
+              squid.meta.DBUtils.streamResultSet(st, rs).map($objName.rsToRow)
+            }
+          }
+        """
 
       case _ =>
         c.abort(c.enclosingPosition, s"Invalid @Query class: ${showRaw(annottees)}")

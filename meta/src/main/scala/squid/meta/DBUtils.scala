@@ -1,13 +1,12 @@
 package squid.meta
 
-import java.sql.{Connection, ResultSet}
+import java.sql.{Statement, Connection, ResultSet}
 
 /**
   * Database utils to simplify using JDBC.
   * Should probably use something like ScalikeJDBC.
   */
 object DBUtils {
-  import DBImplicits._
 
   def execute(sql: String)(implicit c: Connection): Unit = {
     val st = c.createStatement()
@@ -15,24 +14,44 @@ object DBUtils {
     st.close()
   }
 
-  def executeQuery(sql: String)(implicit c: Connection): ResultSet = {
-    val st = c.createStatement()
-    st.executeQuery(sql)
-    // TODO: Close the statement
-  }
-
   // NOTE: This is used by the macros
   def executeQueryStream[A]
       (sql: String, f: ResultSet => A)(implicit c: Connection): Stream[A] = {
-    executeQuery(sql).map(f)
+    val st = c.createStatement()
+    streamResultSet(st, st.executeQuery(sql)).map(f)
   }
-}
 
-object DBImplicits {
-  final implicit class RichResultSet(val underlying: ResultSet) {
-    def map[A](f: ResultSet => A): Stream[A] = {
-      Stream.continually(underlying).takeWhile(_.next()).map(f)
-      // TODO: Close the ResultSet
+  def streamResultSet(st: Statement, rs: ResultSet): Stream[ResultSet] = {
+    if (!rs.isBeforeFirst || rs.getMetaData.getColumnCount == 0) {
+      rs.close()
+      st.close()
+      Stream.empty
+    } else {
+      Stream.continually(rs).takeWhile { rs =>
+        val hasNext = rs.next()
+        if (!hasNext) {
+          // TODO: What if we never traverse the whole ResultSet?
+          rs.close()
+          st.close()
+        }
+        hasNext
+      }
+    }
+  }
+
+  def streamResultSet(rs: ResultSet): Stream[ResultSet] = {
+    if (!rs.isBeforeFirst) {
+      rs.close()
+      Stream.empty
+    } else {
+      Stream.continually(rs).takeWhile { rs =>
+        val hasNext = rs.next()
+        if (!hasNext) {
+          // TODO: What if we never traverse the whole ResultSet?
+          rs.close()
+        }
+        hasNext
+      }
     }
   }
 }
