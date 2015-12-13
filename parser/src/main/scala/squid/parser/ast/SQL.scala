@@ -98,6 +98,8 @@ sealed case class AExprOr(lexpr: Expr, rexpr: Expr) extends Expr
 
 sealed case class AExprNot(rexpr: Expr) extends Expr
 
+sealed case class AExprDistinct(lexpr: Expr, rexpr: Expr) extends Expr
+
 sealed case class FuncCall(
   funcname: List[String],
   args: Option[List[Expr]] = None,
@@ -117,7 +119,7 @@ sealed case class ParamRef(number: Int) extends Expr
 object Expr {
   implicit def exprDecodeJson: DecodeJson[Expr] = (
     const ||| typeCast ||| columnRef ||| funcCall ||| paramRef
-      ||| aExpr ||| aExprAnd ||| aExprOr ||| aExprNot ||| coalesce
+      ||| aExpr ||| aExprAnd ||| aExprOr ||| aExprNot ||| aExprDistinct ||| coalesce
       ||| fail("Failed to parse Expr")
     )
 
@@ -162,6 +164,8 @@ object Expr {
   private def aExprOr = tagged[Expr]("AEXPR OR", DecodeJson.derive[AExprOr])
 
   private def aExprNot = tagged[Expr]("AEXPR NOT", DecodeJson.derive[AExprNot])
+
+  private def aExprDistinct = tagged[Expr]("AEXPR DISTINCT", DecodeJson.derive[AExprDistinct])
 
   private def coalesce = tagged[Expr]("COALESCE", DecodeJson.derive[Coalesce])
 

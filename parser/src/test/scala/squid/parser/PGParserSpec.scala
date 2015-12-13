@@ -12,6 +12,7 @@ class PGParserSpec extends Specification { def is = s2"""
     parse select where param $selectWhereParam
     parse select and or not $selectAndOrNot
     parse select coalesce $selectCoalesce
+    parse is distinct from $isDistinctFrom
   """
 
   def selectLiterals = {
@@ -157,6 +158,20 @@ class PGParserSpec extends Specification { def is = s2"""
           ColumnRef.named("c"),
           ConstInt(1)
         ))))
+      )
+    )
+  }
+
+  def isDistinctFrom = {
+    PGParser.parse("""
+      select a
+      from b
+      where c is distinct from d
+    """).isSuccessful(
+      Select(
+        List(ResTarget(ColumnRef.named("a"))),
+        fromClause = Some(List(RangeVar("b"))),
+        whereClause = Some(AExprDistinct(ColumnRef.named("c"), ColumnRef.named("d")))
       )
     )
   }
