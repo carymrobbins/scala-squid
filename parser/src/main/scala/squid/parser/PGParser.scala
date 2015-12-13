@@ -5,11 +5,11 @@ import java.nio.charset.StandardCharsets
 
 import scala.sys.process._
 
+import com.typesafe.config.ConfigFactory
 import squid.parser.ast.SQL
 
 /** Consumes output from queryparser */
 object PGParser {
-  val command = List("/home/crobbins/work/squid/libpg_parser/parser")
   val charset = StandardCharsets.UTF_8
 
   def parse(sql: String): ParseResult = {
@@ -43,4 +43,8 @@ object PGParser {
   }
   sealed case class ParseError(message: String) extends ParseResult
   sealed case class ParseSuccess(result: SQL) extends ParseResult
+
+  private lazy val config = ConfigFactory.load(getClass.getClassLoader)
+  private lazy val parser = config.getString("squid.parser")
+  private lazy val command = List(parser)
 }
