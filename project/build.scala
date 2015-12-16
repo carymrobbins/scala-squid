@@ -1,9 +1,20 @@
-// import com.simplytyped.Antlr4Plugin._
 import sbt._
 import Keys._
 
+import com.github.joprice.Jni
+import Jni.Keys._
+
 object build extends Build {
   val paradiseVersion = "2.1.0"
+
+  lazy val LIBPG_QUERY_DIR = Option(System.getProperty("LIBPG_QUERY_DIR")).getOrElse {
+    throw new IllegalStateException("The 'LIBPG_QUERY_DIR' property is required.")
+  }
+
+  // NOTE: javaHome.value seems to always be None, regardless of -java-home setting.
+  lazy val JAVA_HOME = Option(System.getProperty("JAVA_HOME")).getOrElse {
+    throw new IllegalStateException("The 'JAVA_HOME' property is required.")
+  }
 
   val buildSettings = Defaults.coreDefaultSettings ++ Seq(
     version := "0.1.0",
@@ -25,15 +36,25 @@ object build extends Build {
     .aggregate(parser, meta, macros, core)
 
   lazy val parser = project
-    // .settings(antlr4Settings: _*)
     .settings(buildSettings: _*)
+    .settings(Jni.settings: _*)
     .settings(
-      // antlr4PackageName in Antlr4 := Some("squid.parser.gen"),
+      jniClasses := Seq("squid.parser.jni.PGParserJNI"),
+      libraryName := "libPGParserJNI",
+      gccFlags := Seq(
+        "-shared",
+        "-fpic",
+        "-O3",
+        s"-L$LIBPG_QUERY_DIR",
+        s"-I$LIBPG_QUERY_DIR",
+        s"-I$JAVA_HOME/include",
+        s"-I$JAVA_HOME/include/linux",
+        s"-I${headersPath.value}"
+      ),
+      jniSourceFiles ++= Seq(
+        file(s"$LIBPG_QUERY_DIR/libpg_query.a")
+      ),
       libraryDependencies ++= Seq(
-        // Manual parsing
-        // "org.scala-lang.modules" %% "scala-parser-combinators" % "1.0.4"
-
-        // Consuming JSON parse trees
         "io.argonaut" %% "argonaut" % "6.2-SNAPSHOT"
     )
   )
