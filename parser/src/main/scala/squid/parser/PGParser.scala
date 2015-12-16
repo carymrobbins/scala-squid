@@ -1,31 +1,28 @@
 package squid.parser
 
-import java.io.ByteArrayInputStream
-import java.nio.charset.StandardCharsets
-
-import scala.sys.process._
-
 import com.typesafe.config.ConfigFactory
 import squid.parser.ast.SQL
 
 /** Consumes output from queryparser */
 object PGParser {
-  val charset = StandardCharsets.UTF_8
-
   def parse(sql: String): ParseResult = {
-    val is = new ByteArrayInputStream(sql.getBytes(charset))
-    val out = (command #< is).lineStream_!.mkString
-    argonaut.Parse.parse(out).fold(
-      ParseError,
-      json => json.as[List[SQL]].fold(
-        (err, history) => ParseError(s"$err\nCursorHistory: $history"),
-        {
-          case Nil => ParseError(s"Empty json array")
-          case x :: Nil => ParseSuccess(x)
-          case _ => ParseError(s"Only one SQL statement is supported.")
-        }
+    val parsed = squid.parser.jni.PGParserJNI.nativeParse(sql)
+    // TODO: Have JNI return an object instead of this hack.
+    if (parsed.startsWith("error")) {
+      ParseError(parsed)
+    } else {
+      argonaut.Parse.parse(parsed).fold(
+        ParseError,
+        json => json.as[List[SQL]].fold(
+          (err, history) => ParseError(s"$err\nCursorHistory: $history"),
+          {
+            case Nil => ParseError("Empty json array")
+            case x :: Nil => ParseSuccess(x)
+            case _ => ParseError("Only one SQL statement is supported.")
+          }
+        )
       )
-    )
+    }
   }
 
   def unsafeParse(sql: String): SQL = {
