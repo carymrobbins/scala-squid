@@ -8,12 +8,12 @@ object build extends Build {
   val paradiseVersion = "2.1.0"
 
   lazy val LIBPG_QUERY_DIR = Option(System.getProperty("LIBPG_QUERY_DIR")).getOrElse {
-    throw new IllegalStateException("The 'LIBPG_QUERY_DIR' property is required.")
+    throw new MessageOnlyException("The 'LIBPG_QUERY_DIR' property is required.")
   }
 
   // NOTE: javaHome.value seems to always be None, regardless of -java-home setting.
   lazy val JAVA_HOME = Option(System.getProperty("JAVA_HOME")).getOrElse {
-    throw new IllegalStateException("The 'JAVA_HOME' property is required.")
+    throw new MessageOnlyException("The 'JAVA_HOME' property is required.")
   }
 
   val buildSettings = Defaults.coreDefaultSettings ++ Seq(
