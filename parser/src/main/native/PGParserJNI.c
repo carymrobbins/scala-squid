@@ -5,37 +5,50 @@
 #include <pg_query.h>
 #include "squid_parser_jni_PGParserJNI.h"
 
+/* Helper constants for finding classes and building method signatures. */
+#define CLASS_PGParserJNI "squid/parser/jni/PGParserJNI"
+#define CLASS_PGParseError CLASS_PGParserJNI "$PGParseError"
+#define CLASS_PGParseResult CLASS_PGParserJNI "$PGParseResult"
+#define CLASS_String "java/lang/String"
+#define PARAM(cls) "L" cls ";"
+
 JNIEXPORT void JNICALL Java_squid_parser_jni_PGParserJNI_nativeInit
   (JNIEnv *env, jclass cls)
 {
   pg_query_init();
 }
 
-JNIEXPORT jstring JNICALL Java_squid_parser_jni_PGParserJNI_nativeParse
+JNIEXPORT jobject JNICALL Java_squid_parser_jni_PGParserJNI_nativeParse
   (JNIEnv * env, jclass cls, jstring sql)
 {
-  char* msg;
+  /* Required values to construct a java PGParseResult. */
+  jstring parseTree = NULL;
+  jobject errorObj = NULL;
+  /* Get a char* ref from our java String and give it to pg_query. */
   const char* sql_buf = (*env)->GetStringUTFChars(env, sql, 0);
-  PgQueryParseResult parsed = pg_query_parse(sql_buf);
+  PgQueryParseResult result = pg_query_parse(sql_buf);
   (*env)->ReleaseStringUTFChars(env, sql, sql_buf);
-  jstring ret = 0;
-  if (parsed.error) {
-    size_t err_msg_size;
-    err_msg_size = snprintf(NULL, 0,
-      "error: %s at %d", parsed.error->message, parsed.error->cursorpos
+  if (result.error) {
+    /* If we have an error, construct a java PGParseError. */
+    jclass errorClass = (*env)->FindClass(env, CLASS_PGParseError);
+    jmethodID errorCtor = (*env)->GetMethodID(env, errorClass, "<init>",
+      "(" PARAM(CLASS_String) "II)V"
     );
-    msg = malloc(err_msg_size + 1);
-    if (msg == NULL) {
-      msg = "error: could not allocate memory for error message";
-    } else {
-      snprintf(msg, err_msg_size,
-        "error: %s at %d", parsed.error->message, parsed.error->cursorpos
-      );
-    }
+    errorObj = (*env)->NewObject(env, errorClass, errorCtor,
+      (*env)->NewStringUTF(env, result.error->message),
+      result.error->lineno,
+      result.error->cursorpos
+    );
   } else {
-    msg = parsed.parse_tree;
+    /* Otherwise, we get a java String from the parse tree. */
+    parseTree = (*env)->NewStringUTF(env, result.parse_tree);
   }
-  ret = (*env)->NewStringUTF(env, msg);
-  pg_query_free_parse_result(parsed);
-  return ret;
+  /* We don't need the original parse result anymore. */
+  pg_query_free_parse_result(result);
+  /* Construct the java PGParseResult to be returned. */
+  jclass resultClass = (*env)->FindClass(env, CLASS_PGParseResult);
+  jmethodID resultCtor = (*env)->GetMethodID(env, resultClass, "<init>",
+    "(" PARAM(CLASS_String) PARAM(CLASS_PGParseError) ")V"
+  );
+  return (*env)->NewObject(env, resultClass, resultCtor, parseTree, errorObj);
 }
