@@ -178,7 +178,7 @@ class PGParserSpec extends Specification { def is = s2"""
 
   implicit final class RichParseResult[A](val underlying: PGParser.ParseResult) {
     def isSuccessful(expected: Any) = underlying.fold(
-      e => failure.updateMessage(e),
+      e => failure.updateMessage(e.toString),
       r => (r === expected).toResult
     )
   }

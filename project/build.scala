@@ -26,7 +26,6 @@ object build extends Build {
     resolvers += Resolver.sonatypeRepo("releases"),
     addCompilerPlugin("org.scalamacros" % "paradise" % paradiseVersion cross CrossVersion.full),
     libraryDependencies ++= Seq(
-      "com.typesafe" % "config" % "1.3.0",
       "org.specs2" %% "specs2-core" % "3.6.6" % "test"
     )
   )
@@ -56,23 +55,18 @@ object build extends Build {
       ),
       libraryDependencies ++= Seq(
         "io.argonaut" %% "argonaut" % "6.2-SNAPSHOT"
-    )
+      )
   )
 
   lazy val meta = project.settings(buildSettings: _*).settings(
     libraryDependencies ++= Seq(
-      postgres
+      "org.postgresql" % "postgresql" % "9.4-1201-jdbc41",
+      "com.typesafe" % "config" % "1.3.0"
     )
   ).dependsOn(parser)
 
   lazy val macros = project.settings(buildSettings: _*)
-    .dependsOn(parser, meta, metaTest)
+    .dependsOn(parser, meta, meta % "test->test")
 
   lazy val core = project.settings(buildSettings: _*).dependsOn(macros)
-
-  // Common dependencies
-
-  val metaTest = meta % "test->test"
-
-  val postgres = "org.postgresql" % "postgresql" % "9.4-1201-jdbc41"
 }
