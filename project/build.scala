@@ -1,4 +1,3 @@
-// import com.simplytyped.Antlr4Plugin._
 import sbt._
 import Keys._
 
@@ -20,38 +19,8 @@ object build extends Build {
     )
   )
 
-  lazy val squid = project.in(file("."))
-    .settings(buildSettings: _*)
-    .aggregate(parser, meta, macros, core)
+  lazy val squid = project.in(file(".")).settings(buildSettings: _*)
+    .aggregate(protocol)
 
-  lazy val parser = project
-    // .settings(antlr4Settings: _*)
-    .settings(buildSettings: _*)
-    .settings(
-      // antlr4PackageName in Antlr4 := Some("squid.parser.gen"),
-      libraryDependencies ++= Seq(
-        // Manual parsing
-        // "org.scala-lang.modules" %% "scala-parser-combinators" % "1.0.4"
-
-        // Consuming JSON parse trees
-        "io.argonaut" %% "argonaut" % "6.2-SNAPSHOT"
-    )
-  )
-
-  lazy val meta = project.settings(buildSettings: _*).settings(
-    libraryDependencies ++= Seq(
-      postgres
-    )
-  ).dependsOn(parser)
-
-  lazy val macros = project.settings(buildSettings: _*)
-    .dependsOn(parser, meta, metaTest)
-
-  lazy val core = project.settings(buildSettings: _*).dependsOn(macros)
-
-  // Common dependencies
-
-  val metaTest = meta % "test->test"
-
-  val postgres = "org.postgresql" % "postgresql" % "9.4-1201-jdbc41"
+  lazy val protocol = project.settings(buildSettings: _*)
 }
