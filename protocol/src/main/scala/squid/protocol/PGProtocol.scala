@@ -10,8 +10,6 @@ import scala.collection.mutable
 import scala.io.AnsiColor
 
 object PGProtocol {
-  import PGFrontendMessage._, PGBackendMessage._
-
   val CHARSET = StandardCharsets.UTF_8
   val PROTOCOL_MAJOR: Byte = 3
   val PROTOCOL_MINOR: Byte = 0
@@ -31,39 +29,71 @@ object PGProtocol {
     c.connect()
     c
   }
+}
 
-  def describe(sql: String, types: List[OID])(implicit c: PGConnection) = {
-    c.sync()
-    c.send(Parse("", sql, types))
-    c.send(Describe(""))
-    c.send(Flush)
-    c.send(Sync)
-    c.flush()
-    c.receive(true) match {
-      case Some(ParseComplete) => ()
-      case other => throw new RuntimeException(s"Expected ParseComplete, got: $other")
-    }
-    val paramTypes = c.receive(true) match {
-      case Some(ParameterDescription(pts)) => pts
-      case other => throw new RuntimeException(s"Expected ParameterDescription, got: $other")
-    }
-    val cols = c.receive(true) match {
-      case Some(NoData) => List()
-      case Some(RowDescription(cds)) =>
-        cds.map { cd =>
-          // TODO: Check nullability via query
-          val nullable = true
-          DescribeColumn(cd.name, cd.colType, nullable)
-        }
-      case other => throw new RuntimeException(s"Expected RowDescription, got: $other")
-    }
-    DescribeResult(paramTypes, cols)
+trait ToPGValue[A] {
+  def toPGValue(a: A): PGValue
+}
+
+object ToPGValue {
+  def apply[A](f: A => PGValue): ToPGValue[A] = new ToPGValue[A] {
+    override def toPGValue(a: A): PGValue = f(a)
   }
+
+  def from[A : ToPGValue](a: A): PGValue = implicitly[ToPGValue[A]].toPGValue(a)
+
+  implicit val toPGValueInt: ToPGValue[Int] = ToPGValue(n => PGValue.Text(n.toString))
+
+  implicit val toPGValueOID: ToPGValue[OID] = ToPGValue(oid => from(oid.toInt))
+
+  implicit val toPGValueString: ToPGValue[String] = ToPGValue(PGValue.Text)
+}
+
+trait FromPGValue[A] {
+  def fromPGValue(v: PGValue): Either[String, A]
+}
+
+object FromPGValue {
+  def apply[A](f: PGValue => Either[String, A]): FromPGValue[A] = new FromPGValue[A] {
+    override def fromPGValue(v: PGValue): Either[String, A] = f(v)
+  }
+
+  implicit val fromPGValueBoolean: FromPGValue[Boolean] = FromPGValue {
+    case PGValue.Text("t") => Right(true)
+    case PGValue.Text("f") => Right(false)
+    case other => Left(s"Expected 't' or 'f', got: $other")
+  }
+
+  implicit val fromPGValueOID: FromPGValue[OID] = FromPGValue {
+    case PGValue.Text(s) =>
+      try {
+        Right(OID(s.toInt))
+      } catch {
+        case e: NumberFormatException => Left(s"Invalid OID number: $s")
+      }
+
+    case other => Left(s"Expected OID number, got: $other")
+  }
+}
+
+final case class PGType[A](namespace: String, typeName: String) {
+  def tupled: (String, String) = (namespace, typeName)
+}
+
+object PGType {
+  def tupled[A : PGType]: (String, String) = implicitly[PGType[A]].tupled
+
+  implicit val pgTypeOID: PGType[OID] = PGType("pg_catalog", "oid")
+
+  implicit val pgTypeInt: PGType[Int] = PGType("pg_catalog", "int4")
+
+  implicit val pgTypeString: PGType[String] = PGType("pg_catalog", "text")
 }
 
 final case class DescribeResult(
   paramTypes: List[OID],
-  columns: List[DescribeColumn]
+  columns: List[DescribeColumn],
+  parseTree: String
 )
 
 final case class DescribeColumn(name: String, colType: OID, nullable: Boolean)
@@ -74,6 +104,64 @@ final case class PGProtocolError(msg: PGBackendMessage.ErrorResponse) extends Ex
 
 final class PGConnection(info: PGConnectInfo) {
   import PGFrontendMessage._, PGBackendMessage._
+
+  def describe(sql: String, types: List[OID]): DescribeResult = {
+    sync()
+    send(Parse("", sql, types))
+    send(Describe(""))
+    send(Flush)
+    send(Sync)
+    flush()
+    val parseTree = receive() match {
+      case Some(NoticeResponse(fields)) => fields.toMap('D')
+      case other => throw new RuntimeException(s"Expected NoticeResponse, got: $other")
+    }
+    receive() match {
+      case Some(ParseComplete) => // Skip
+      case other => throw new RuntimeException(s"Expected ParseComplete, got: $other")
+    }
+    val paramTypes = receive() match {
+      case Some(ParameterDescription(pts)) => pts
+      case other => throw new RuntimeException(s"Expected ParameterDescription, got: $other")
+    }
+    val cols = receive() match {
+      case Some(NoData) => List()
+      case Some(RowDescription(cds)) =>
+        cds.map { cd =>
+          val nullable = columnIsNullable(cd.table, cd.number)
+          DescribeColumn(cd.name, cd.colType, nullable)
+        }
+      case other => throw new RuntimeException(s"Expected RowDescription, got: $other")
+    }
+    DescribeResult(paramTypes, cols, parseTree)
+  }
+
+  def preparedQuery
+      (query: String, params: List[PGParam], binaryCols: List[Boolean])
+      : Stream[List[PGValue]] = {
+    bind(query, params, binaryCols)
+    send(Execute("", 0)) // zero for "fetch all rows"
+    send(Flush)
+    send(Sync)
+    flush()
+    new Iterator[List[PGValue]] {
+      private var nextMsg = receive()
+
+      override def hasNext: Boolean = nextMsg match {
+        case Some(EmptyQueryResponse) => false
+        case Some(_: CommandComplete) => false
+        case _ => true
+      }
+
+      override def next(): List[PGValue] = nextMsg match {
+        case Some(DataRow(values)) =>
+          nextMsg = receive()
+          values
+
+        case other => throw new RuntimeException(s"Unexpected row message: $other")
+      }
+    }.toStream
+  }
 
   def send(msg: PGFrontendMessage): Unit = {
     state = getNewState(msg)
@@ -88,7 +176,7 @@ final class PGConnection(info: PGConnectInfo) {
 
   def flush(): Unit = out.flush()
 
-  def receive(blocking: Boolean): Option[PGBackendMessage] = {
+  def receive(): Option[PGBackendMessage] = {
     val r = new BinaryReader(in, PGProtocol.CHARSET)
     if (r.peek() == -1) {
       None
@@ -101,9 +189,8 @@ final class PGConnection(info: PGConnectInfo) {
 
   def sync(): Unit = state match {
     case PGState.Closed => throw new RuntimeException("The connection is closed")
-    case PGState.Pending => syncWait(true)
-    case PGState.Unknown => syncWait(false)
-    case _ => ()
+    case PGState.Pending | PGState.Unknown => syncWait()
+    case _ => log(s"Sync ok, state is $state")
   }
 
   def connect(): Unit = {
@@ -116,35 +203,83 @@ final class PGConnection(info: PGConnectInfo) {
   }
 
   def close(): Unit = {
-    in.close()
-    out.close()
+    send(Terminate)
     socket.close()
   }
 
   def getState: PGState = state
 
+  def bind(query: String, params: List[PGParam], binaryCols: List[Boolean]): Unit = {
+    sync()
+    val paramTypes = params.flatMap(_.typeOID)
+    val key = (query, paramTypes)
+    val id = preparedStatements.getOrElse(key, {
+      val id = preparedStatements.size + 1
+      send(Parse(name = id.toString, query, paramTypes))
+      id
+    })
+    val paramValues = params.map(_.value)
+    send(Bind(portal = "", name = id.toString, paramValues, binaryCols))
+    send(Flush) // TODO: Why do we have to send a Flush here?
+    flush()
+
+    while (true) {
+      receive() match {
+        case Some(ParseComplete) => preparedStatements.update(key, id)
+        case Some(_: NoticeResponse) => // Parse tree, ignored.
+        case Some(BindComplete) => return
+        case other => throw new RuntimeException(s"Unexpected response: $other")
+      }
+    }
+  }
+
+  def getTypeOID[A : PGType](): OID = {
+    val (namespace, typeName) = PGType.tupled[A]
+    getTypeOID(namespace, typeName)
+  }
+
+  def getTypeOID(namespace: String, typeName: String): OID = {
+    typeOIDs.get((namespace, typeName)) match {
+      case Some(oid) => oid
+
+      case None =>
+        preparedQuery(
+          """
+            select pg_type.oid
+            from pg_catalog.pg_type, pg_catalog.pg_namespace
+            where pg_type.typnamespace = pg_namespace.oid and
+                  pg_namespace.nspname = $1 and
+                  pg_type.typname = $2
+          """,
+          List(PGParam.from(namespace), PGParam.from(typeName)),
+          binaryCols = Nil
+        ).flatten.headOption.map { v =>
+          val oid = v.as[OID]
+          cacheTypeOID(namespace, typeName, oid)
+          oid
+        }.getOrElse {
+          throw new RuntimeException(s"pg_type not found: $namespace.$typeName")
+        }
+    }
+  }
+
   @tailrec
-  private def syncWait(block: Boolean): Unit = {
-    receive(block) match {
+  private def syncWait(): Unit = {
+    receive() match {
       case None =>
         send(Sync)
         flush()
-        syncWait(true)
+        syncWait()
 
-      case Some(err: ErrorResponse) =>
-        syncWait(block)
-
-      case Some(msg: ReadyForQuery) => ()
-
-      case Some(msg) =>
-        throw new RuntimeException(s"Unexpected message during sync: $msg")
+      case Some(_: ReadyForQuery) => // Done
+      case Some(msg) => throw new RuntimeException(s"Unexpected message during sync: $msg")
     }
   }
 
   private def readStartupMessages(): Unit = {
     @tailrec
     def loop(): Unit = {
-      receive(true).getOrElse {
+      receive().getOrElse {
         throw new RuntimeException("No message received from backend")
       } match {
         case err: ErrorResponse => throw PGProtocolError(err)
@@ -193,7 +328,7 @@ final class PGConnection(info: PGConnectInfo) {
   private def doAuth(): Unit = {
     @tailrec
     def loop(): Unit = {
-      receive(true).getOrElse {
+      receive().getOrElse {
         throw new RuntimeException("No message received from backend")
       } match {
         case err: ErrorResponse => throw PGProtocolError(err)
@@ -220,18 +355,40 @@ final class PGConnection(info: PGConnectInfo) {
     case _ => PGState.Command
   }
 
-  private def writeByte(c: Char): Unit = out.write(c.toByte)
+  private def columnIsNullable(table: OID, colNum: Int): Boolean = {
+    if (table.toInt == 0) {
+      true
+    } else {
+      columnNullables.get((table, colNum)) match {
+        case Some(nullable) => nullable
 
-  private def writeBytes4(n: Int): Unit = out.write(ByteBuffer.allocate(4).putInt(n).array())
+        case None =>
+          val result = preparedQuery(
+            "select attnotnull from pg_catalog.pg_attribute where attrelid = $1 and attnum = $2",
+            List(
+              PGParam.from(table).typed(getTypeOID[OID]()),
+              PGParam.from(colNum).typed(getTypeOID[Int]())
+            ),
+            binaryCols = Nil
+          )
+          val nullable = result.flatten.headOption.map(v => !v.as[Boolean]).getOrElse(true)
+          columnNullables.update((table, colNum), nullable)
+          nullable
+      }
+    }
+  }
 
-  private def writeBytes(bs: Array[Byte]): Unit = out.write(bs)
+  private def cacheTypeOID(namespace: String, typeName: String, oid: OID): Unit = {
+    typeOIDs.update((namespace, typeName), oid)
+    oidTypes.update(oid, (namespace, typeName))
+  }
 
   private def log(msg: Any, received: Boolean = false, sent: Boolean = false): Unit = {
     if (info.debug) {
       if (received) {
-        println(s"${AnsiColor.BLUE_B}<<< $msg${AnsiColor.RESET}")
+        println(s"${AnsiColor.BLUE}<<< $msg${AnsiColor.RESET}")
       } else if (sent) {
-        println(s"${AnsiColor.MAGENTA_B}>>> $msg${AnsiColor.RESET}")
+        println(s"${AnsiColor.MAGENTA}>>> $msg${AnsiColor.RESET}")
       } else {
         println(s"${AnsiColor.YELLOW}LOG: $msg${AnsiColor.RESET}")
       }
@@ -245,13 +402,20 @@ final class PGConnection(info: PGConnectInfo) {
     "standard_conforming_strings" -> "on",
     "bytea_output" -> "hex",
     "DateStyle" -> "ISO, YMD",
-    "IntervalStyle" -> "iso_8601"
+    "IntervalStyle" -> "iso_8601",
+    // These allow us to retrieve parse trees via NoticeResponse
+    "client_min_messages" -> "debug1",
+    "debug_print_parse" -> "on"
   )
 
   private[this] var state: PGState = PGState.Unknown
   private[this] var pid: Int = -1
   private[this] var key: Int = -1
-  private[this] val params = mutable.Map.empty[String, String]
+  private val params = mutable.Map.empty[String, String]
+  private val preparedStatements = mutable.Map.empty[(String, List[OID]), Int]
+  private val columnNullables = mutable.Map.empty[(OID, Int), Boolean]
+  private val typeOIDs = mutable.Map.empty[(String, String), OID]
+  private val oidTypes = mutable.Map.empty[OID, (String, String)]
   private val socket = new Socket()
   private lazy val in: InputStream = new BufferedInputStream(socket.getInputStream, 8192)
   private lazy val out: OutputStream = new BufferedOutputStream(socket.getOutputStream, 8192)
@@ -317,11 +481,27 @@ sealed trait PGFrontendMessage {
         w.writeStringNul(msg.name)
         Encoded(Some('D'), w.toByteArray)
 
-      case Flush =>
-        Encoded(Some('H'), Array.empty)
+      case msg: Bind =>
+        w.writeStringNul(msg.portal)
+        w.writeStringNul(msg.name)
+        w.writeInt16(msg.binaryColumns.length.toShort)
+        msg.binaryColumns.foreach { bc => w.writeInt16(if (bc) 1 else 0) }
+        w.writeInt16(msg.params.length.toShort)
+        msg.params.foreach { v =>
+          w.writeInt32(v.length)
+          w.writeBytes(v.encode)
+        }
+        w.writeInt16(0) // TODO: reset-column format codes
+        Encoded(Some('B'), w.toByteArray)
 
-      case Sync =>
-        Encoded(Some('S'), Array.empty)
+      case msg: Execute =>
+        w.writeStringNul(msg.portal)
+        w.writeInt32(msg.maxRows)
+        Encoded(Some('E'), w.toByteArray)
+
+      case Flush => Encoded(Some('H'), Array.empty)
+      case Sync => Encoded(Some('S'), Array.empty)
+      case Terminate => Encoded(Some('X'), Array.empty)
 
       case msg =>
         throw new NotImplementedError(s"Not implemented: $msg")
@@ -333,11 +513,11 @@ object PGFrontendMessage {
   sealed case class StartupMessage(params: (String, String)*) extends PGFrontendMessage
   sealed case class CancelRequest(pid: Int, key: Int)
   sealed case class Bind(
-    name: String, params: List[PGValue], binaryColumns: List[Boolean]
+    portal: String, name: String, params: List[PGValue], binaryColumns: List[Boolean]
   ) extends PGFrontendMessage
   sealed case class Close(name: String) extends PGFrontendMessage
   sealed case class Describe(name: String) extends PGFrontendMessage
-  sealed case class Execute(maxRows: Int) extends PGFrontendMessage
+  sealed case class Execute(portal: String, maxRows: Int) extends PGFrontendMessage
   case object Flush extends PGFrontendMessage
   sealed case class Parse(
     name: String, query: String, types: List[OID]
@@ -437,6 +617,7 @@ object ColDescription {
   }
 }
 
+// TODO: Should probably have phantom type param.
 final case class OID(toInt: Int) extends AnyVal
 object OID {
   def decode(r: BinaryReader): OID = OID(r.readInt32())
@@ -454,7 +635,27 @@ object MessageFields {
   }
 }
 
-sealed trait PGValue
+sealed trait PGValue {
+  def length: Int = this match {
+    case PGValue.Null => -1
+    case PGValue.Text(v) => v.length
+    case PGValue.Binary(v) => v.length
+  }
+
+  def encode: Array[Byte] = this match {
+    case PGValue.Null => Array.empty
+    case PGValue.Text(v) => v.getBytes(PGProtocol.CHARSET)
+    case PGValue.Binary(v) => v
+  }
+
+  def as[A : FromPGValue]: A = {
+    implicitly[FromPGValue[A]].fromPGValue(this) match {
+      case Right(a) => a
+      case Left(err) => throw new RuntimeException(err) // TODO: Better exception
+    }
+  }
+}
+
 object PGValue {
   case object Null extends PGValue
   sealed case class Text(value: String) extends PGValue
@@ -464,6 +665,14 @@ object PGValue {
     case 0xFFFFFFFF => PGValue.Null
     case len => PGValue.Text(r.readString(len))
   }
+}
+
+final case class PGParam(value: PGValue, typeOID: Option[OID] = None) {
+  def typed(o: OID): PGParam = copy(typeOID = Some(o))
+}
+
+object PGParam {
+  def from[A : ToPGValue](a: A): PGParam = PGParam(ToPGValue.from(a), None)
 }
 
 class BinaryReader(in: InputStream, charset: Charset) {
