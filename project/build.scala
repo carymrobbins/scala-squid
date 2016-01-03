@@ -13,6 +13,7 @@ object build extends Build {
     resolvers += Resolver.sonatypeRepo("snapshots"),
     resolvers += Resolver.sonatypeRepo("releases"),
     addCompilerPlugin("org.scalamacros" % "paradise" % paradiseVersion cross CrossVersion.full),
+    libraryDependencies <+= scalaVersion("org.scala-lang" % "scala-reflect" % _),
     libraryDependencies ++= Seq(
       "com.typesafe" % "config" % "1.3.0",
       "org.specs2" %% "specs2-core" % "3.6.6" % "test"
@@ -20,7 +21,17 @@ object build extends Build {
   )
 
   lazy val squid = project.in(file(".")).settings(buildSettings: _*)
-    .aggregate(protocol)
+    .aggregate(protocol, macros)
 
-  lazy val protocol = project.settings(buildSettings: _*)
+  lazy val protocol = project.settings(buildSettings: _*).settings(
+    libraryDependencies ++= Seq(
+      "org.scala-lang.modules" %% "scala-parser-combinators" % "1.0.4"
+    )
+  )
+
+  lazy val macros = project.settings(buildSettings: _*).settings(
+    libraryDependencies ++= Seq(
+      "org.postgresql" % "postgresql" % "9.4.1207"
+    )
+  ).dependsOn(protocol)
 }
