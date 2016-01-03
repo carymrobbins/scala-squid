@@ -9,6 +9,8 @@ import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.io.AnsiColor
 
+import com.typesafe.config.Config
+
 object PGProtocol {
   val CHARSET = StandardCharsets.UTF_8
   val PROTOCOL_MAJOR: Byte = 3
@@ -74,6 +76,11 @@ object FromPGValue {
 
     case other => Left(s"Expected OID number, got: $other")
   }
+
+  implicit val fromPGValueString: FromPGValue[String] = FromPGValue {
+    case PGValue.Text(s) => Right(s)
+    case other => Left(s"Expected String, got: $other")
+  }
 }
 
 final case class PGType[A](namespace: String, typeName: String) {
@@ -98,12 +105,15 @@ final case class DescribeResult(
 
 final case class DescribeColumn(name: String, colType: OID, nullable: Boolean)
 
+final case class PGTypeName(namespace: String, typeName: String)
+
 final case class PGProtocolError(msg: PGBackendMessage.ErrorResponse) extends Exception {
   override def getMessage: String = msg.toString
 }
 
 final class PGConnection(info: PGConnectInfo) {
-  import PGFrontendMessage._, PGBackendMessage._
+  import PGBackendMessage._
+  import PGFrontendMessage._
 
   def describe(sql: String, types: List[OID]): DescribeResult = {
     sync()
@@ -112,10 +122,20 @@ final class PGConnection(info: PGConnectInfo) {
     send(Flush)
     send(Sync)
     flush()
-    val parseTree = receive() match {
-      case Some(NoticeResponse(fields)) => fields.toMap('D')
+
+    @tailrec
+    def waitForParseTree(): String = receive() match {
+      case Some(NoticeResponse(fields)) =>
+        fields.toMap.get('D') match {
+          case Some(result) => result // Found parse tree
+          case None => waitForParseTree() // Ignore and recurse, waiting for parse tree
+        }
+
+      case Some(err: ErrorResponse) => throw PGProtocolError(err)
       case other => throw new RuntimeException(s"Expected NoticeResponse, got: $other")
     }
+
+    val parseTree = waitForParseTree()
     receive() match {
       case Some(ParseComplete) => // Skip
       case other => throw new RuntimeException(s"Expected ParseComplete, got: $other")
@@ -233,6 +253,7 @@ final class PGConnection(info: PGConnectInfo) {
     }
   }
 
+  //noinspection AccessorLikeMethodIsEmptyParen
   def getTypeOID[A : PGType](): OID = {
     val (namespace, typeName) = PGType.tupled[A]
     getTypeOID(namespace, typeName)
@@ -259,6 +280,30 @@ final class PGConnection(info: PGConnectInfo) {
           oid
         }.getOrElse {
           throw new RuntimeException(s"pg_type not found: $namespace.$typeName")
+        }
+    }
+  }
+
+  def getTypeName(oid: OID): PGTypeName = {
+    oidTypes.get(oid) match {
+      case Some((namespace, typeName)) => PGTypeName(namespace, typeName)
+
+      case None =>
+        preparedQuery(
+          """
+            select pg_namespace.nspname, pg_type.typname
+            from pg_catalog.pg_type, pg_catalog.pg_namespace
+            where pg_type.typnamespace = pg_namespace.oid and
+                  pg_type.oid = $1
+          """,
+          List(PGParam.from(oid)),
+          binaryCols = Nil
+        ).flatten.take(2).toList match {
+          case List(pgNamespace, pgTypeName) =>
+            val namespace = pgNamespace.as[String]
+            val typeName = pgTypeName.as[String]
+            cacheTypeOID(namespace, typeName, oid)
+            PGTypeName(namespace, typeName)
         }
     }
   }
@@ -405,7 +450,8 @@ final class PGConnection(info: PGConnectInfo) {
     "IntervalStyle" -> "iso_8601",
     // These allow us to retrieve parse trees via NoticeResponse
     "client_min_messages" -> "debug1",
-    "debug_print_parse" -> "on"
+    "debug_print_parse" -> "on",
+    "debug_pretty_print" -> "off"
   )
 
   private[this] var state: PGState = PGState.Unknown
@@ -430,6 +476,17 @@ final case class PGConnectInfo(
   database: String,
   debug: Boolean = false
 )
+
+object PGConnectInfo {
+  def fromConfig(config: Config): PGConnectInfo = PGConnectInfo(
+    host = config.getString("squid.protocol.host"),
+    port = config.getInt("squid.protocol.port"),
+    timeout = config.getInt("squid.protocol.timeout"),
+    user = config.getString("squid.protocol.username"),
+    password = config.getString("squid.protocol.password"),
+    database = config.getString("squid.protocol.database")
+  )
+}
 
 sealed trait PGState
 object PGState {

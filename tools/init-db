@@ -1,0 +1,28 @@
+#!/bin/bash
+
+DB_NAME=squid
+
+# Drop the db if it already exists.
+dropdb $DB_NAME
+
+set -e
+
+createdb $DB_NAME
+
+cat << ENDSQL | psql $DB_NAME
+
+begin;
+
+create schema foo;
+
+create table foo.bar(
+  id serial primary key,
+  quux text
+);
+
+insert into foo.bar (quux) values
+  ('alpha'), (null), ('charlie');
+
+commit;
+
+ENDSQL
