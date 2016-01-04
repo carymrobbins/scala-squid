@@ -4,76 +4,6 @@ import squid.protocol.OID
 
 import PGParser.Expr
 
-/**
-  * Structure of the PostgreSQL Query AST
-  * PostgreSQL Documentation: http://doxygen.postgresql.org/structQuery.html
-  */
-final case class Query(
-  commandType: CmdType,
-  querySource: QuerySource,
-  canSetTag: Boolean,
-  utilityStmt: Option[Nothing],
-  resultRelation: Int,
-  hasAggs: Boolean,
-  hasWindowFuncs: Boolean,
-  hasSubLinks: Boolean,
-  hasDistinctOn: Boolean,
-  hasRecursive: Boolean,
-  hasModifyingCTE: Boolean,
-  hasForUpdate: Boolean,
-  cteList: Option[Nothing]
-  // rtable: RangeTblEntry,
-  //  jointree: ,
-  //  targetList: ,
-  //  withCheckOptions: ,
-  //  returningList: ,
-  //  groupClause: ,
-  //  havingQual: ,
-  //  windowClause: ,
-  //  distinctClause: ,
-  //  sortClause: ,
-  //  limitOffset: ,
-  //  limitCount: ,
-  //  rowMarks: ,
-  //  setOperations: ,
-  //  constraintDeps:
-)
-
-object Query {
-  def fromExpr(expr: Expr): PGParseDecode[Query] = {
-    import PGParseDecode.Combinators._
-    for {
-      o <- obj(expr, "QUERY")
-      commandType <- get(o, "commandType", int).flatMap(iso(CmdType, _))
-      querySource <- get(o, "querySource", int).flatMap(iso(QuerySource, _))
-      canSetTag <- get(o, "canSetTag", bool)
-      utilityStmt <- get(o, "utilityStmt", nul)
-      resultRelation <- get(o, "resultRelation", int)
-      hasAggs <- get(o, "hasAggs", bool)
-      hasWindowFuncs <- get(o, "hasWindowFuncs", bool)
-      hasSubLinks <- get(o, "hasSubLinks", bool)
-      hasDistinctOn <- get(o, "hasDistinctOn", bool)
-      hasRecursive <- get(o, "hasRecursive", bool)
-      hasModifyingCTE <- get(o, "hasModifyingCTE", bool)
-      hasForUpdate <- get(o, "hasForUpdate", bool)
-    } yield Query(
-      commandType = commandType,
-      querySource = querySource,
-      canSetTag = canSetTag,
-      utilityStmt = utilityStmt,
-      resultRelation = resultRelation,
-      hasAggs = hasAggs,
-      hasWindowFuncs = hasWindowFuncs,
-      hasSubLinks = hasSubLinks,
-      hasDistinctOn = hasDistinctOn,
-      hasRecursive = hasRecursive,
-      hasModifyingCTE = hasModifyingCTE,
-      hasForUpdate = hasForUpdate,
-      cteList = None
-    )
-  }
-}
-
 sealed trait PGParseDecode[+A] {
   def fold[X](failure: String => X, success: A => X): X = this match {
     case PGParseDecode.Failure(msg) => failure(msg)
@@ -135,15 +65,122 @@ object PGParseDecode {
       case other => PGParseDecode.Failure(s"Expected bool, got: $other")
     }
 
+    def ident(expr: Expr): PGParseDecode[String] = expr match {
+      case Expr.Ident(s) => PGParseDecode.Success(s)
+      case other => PGParseDecode.Failure(s"Expected ident, got: $other")
+    }
+
+    def oid(expr: Expr): PGParseDecode[OID] = expr match {
+      case Expr.Int(n) if n >= 0 => PGParseDecode.Success(OID(n))
+      case other => PGParseDecode.Failure(s"Expected oid, got: $other")
+    }
+
+    def char(expr: Expr): PGParseDecode[Char] = expr match {
+      case Expr.Ident(s) if s.length == 1 => PGParseDecode.Success(s.head)
+      case other => PGParseDecode.Failure(s"Expected char, got: $other")
+    }
+
+    def list[A](f: Expr => PGParseDecode[A])(expr: Expr): PGParseDecode[List[A]] = expr match {
+      case Expr.List(xs) =>
+        xs match {
+          case Nil => PGParseDecode.Success(Nil)
+          case head :: tail => tail.foldRight(f(head).map(List(_)))((x, acc) =>
+            acc.flatMap(ys => f(x).map(ys :+ _))
+          )
+        }
+
+      case other => PGParseDecode.Failure(s"Expected list, got: $other")
+    }
+
+    def nullable[A](f: Expr => PGParseDecode[A])(expr: Expr): PGParseDecode[Option[A]] = {
+      expr match {
+        case Expr.Null => PGParseDecode.Success(None)
+        case _ => f(expr).map(Some(_))
+      }
+    }
+
     def nul(expr: Expr): PGParseDecode[Option[Nothing]] = expr match {
       case Expr.Null => PGParseDecode.Success(None)
       case other => PGParseDecode.Failure(s"Expected null, got: $other")
     }
 
-    def iso[A <: Iso[K], K](c: IsoCompanion[A, K], k: K): PGParseDecode[A] = c.up(k) match {
+    def iso[A <: Iso[K], K](c: IsoCompanion[A, K])(k: K): PGParseDecode[A] = c.up(k) match {
       case None => PGParseDecode.Failure(s"Invalid $c value '$k'")
       case Some(v) => PGParseDecode.Success(v)
     }
+  }
+}
+
+
+/**
+  * Structure of the PostgreSQL Query AST
+  * PostgreSQL Documentation: http://doxygen.postgresql.org/structQuery.html
+  */
+final case class Query(
+  commandType: CmdType,
+  querySource: QuerySource,
+  canSetTag: Boolean,
+  utilityStmt: Option[Nothing],
+  resultRelation: Int,
+  hasAggs: Boolean,
+  hasWindowFuncs: Boolean,
+  hasSubLinks: Boolean,
+  hasDistinctOn: Boolean,
+  hasRecursive: Boolean,
+  hasModifyingCTE: Boolean,
+  hasForUpdate: Boolean,
+  cteList: Option[Nothing],
+  rtable: List[RangeTblEntry]
+  //  jointree: ,
+  //  targetList: ,
+  //  withCheckOptions: ,
+  //  returningList: ,
+  //  groupClause: ,
+  //  havingQual: ,
+  //  windowClause: ,
+  //  distinctClause: ,
+  //  sortClause: ,
+  //  limitOffset: ,
+  //  limitCount: ,
+  //  rowMarks: ,
+  //  setOperations: ,
+  //  constraintDeps:
+)
+
+object Query {
+  def fromExpr(expr: Expr): PGParseDecode[Query] = {
+    import PGParseDecode.Combinators._
+    for {
+      o <- obj(expr, "QUERY")
+      commandType <- get(o, "commandType", int).flatMap(iso(CmdType))
+      querySource <- get(o, "querySource", int).flatMap(iso(QuerySource))
+      canSetTag <- get(o, "canSetTag", bool)
+      utilityStmt <- get(o, "utilityStmt", nul)
+      resultRelation <- get(o, "resultRelation", int)
+      hasAggs <- get(o, "hasAggs", bool)
+      hasWindowFuncs <- get(o, "hasWindowFuncs", bool)
+      hasSubLinks <- get(o, "hasSubLinks", bool)
+      hasDistinctOn <- get(o, "hasDistinctOn", bool)
+      hasRecursive <- get(o, "hasRecursive", bool)
+      hasModifyingCTE <- get(o, "hasModifyingCTE", bool)
+      hasForUpdate <- get(o, "hasForUpdate", bool)
+      rtable <- get(o, "rtable", list(RangeTblEntry.fromExpr))
+    } yield Query(
+      commandType = commandType,
+      querySource = querySource,
+      canSetTag = canSetTag,
+      utilityStmt = utilityStmt,
+      resultRelation = resultRelation,
+      hasAggs = hasAggs,
+      hasWindowFuncs = hasWindowFuncs,
+      hasSubLinks = hasSubLinks,
+      hasDistinctOn = hasDistinctOn,
+      hasRecursive = hasRecursive,
+      hasModifyingCTE = hasModifyingCTE,
+      hasForUpdate = hasForUpdate,
+      cteList = None,
+      rtable = rtable
+    )
   }
 }
 
@@ -197,7 +234,37 @@ sealed case class RangeTblEntry(
   lateral: Boolean,
   inh: Boolean,
   inFromCl: Boolean
+  // requiredPerms
+  // checkAsUser
+  // selectedCols
+  // modifiedCols
+  // securityQuals
 )
+
+object RangeTblEntry {
+  import PGParseDecode.Combinators._
+
+  def fromExpr(expr: Expr): PGParseDecode[RangeTblEntry] = for {
+    o <- obj(expr, "RTE")
+    alias <- get(o, "alias", nullable(Alias.fromExpr))
+    eref <- get(o, "eref", nullable(Alias.fromExpr))
+    rtekind <- get(o, "rtekind", int).flatMap(iso(RTEKind))
+    relid <- get(o, "relid", oid)
+    relkind <- get(o, "relkind", char).flatMap(iso(RelKind))
+    lateral <- get(o, "lateral", bool)
+    inh <- get(o, "inh", bool)
+    inFromCl <- get(o, "inFromCl", bool)
+  } yield RangeTblEntry(
+    alias = alias,
+    eref = eref,
+    rtekind = rtekind,
+    relid = relid,
+    relkind = relkind,
+    lateral = lateral,
+    inh = inh,
+    inFromCl = inFromCl
+  )
+}
 
 sealed abstract class RTEKind(val down: Int) extends Iso[Int]
 object RTEKind extends IsoCompanion[RTEKind, Int] {
@@ -227,8 +294,20 @@ object RelKind extends IsoCompanion[RelKind, Char] {
   )
 }
 
-sealed case class Alias(
+final case class Alias(
   aliasname: String,
   colnames: Option[List[String]] = None
 )
 
+object Alias {
+  import PGParseDecode.Combinators._
+
+  def fromExpr(expr: Expr): PGParseDecode[Alias] = for {
+    o <- obj(expr, "ALIAS")
+    aliasname <- get(o, "aliasname", ident)
+    colnames <- get(o, "colnames", nullable(list(ident)))
+  } yield Alias(
+    aliasname = aliasname,
+    colnames = colnames
+  )
+}

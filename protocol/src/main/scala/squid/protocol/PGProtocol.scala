@@ -253,6 +253,29 @@ final class PGConnection(info: PGConnectInfo) {
     }
   }
 
+  def getTableOID(schema: String, table: String): Option[OID] = {
+    tableOIDs.get((schema, table)) match {
+      case Some(oid) => Some(oid)
+
+      case None =>
+        preparedQuery(
+          """
+            select pg_class.oid
+            from pg_catalog.pg_class, pg_catalog.pg_namespace
+            where pg_class.relnamespace = pg_namespace.oid and
+                  pg_namespace.nspname = $1 and
+                  pg_class.relname = $2
+          """,
+          List(PGParam.from(schema), PGParam.from(table)),
+          binaryCols = Nil
+        ).flatten.headOption.map { v =>
+          val oid = v.as[OID]
+          tableOIDs.update((schema, table), oid)
+          oid
+        }
+    }
+  }
+
   //noinspection AccessorLikeMethodIsEmptyParen
   def getTypeOID[A : PGType](): OID = {
     val (namespace, typeName) = PGType.tupled[A]
@@ -462,6 +485,7 @@ final class PGConnection(info: PGConnectInfo) {
   private val columnNullables = mutable.Map.empty[(OID, Int), Boolean]
   private val typeOIDs = mutable.Map.empty[(String, String), OID]
   private val oidTypes = mutable.Map.empty[OID, (String, String)]
+  private val tableOIDs = mutable.Map.empty[(String, String), OID]
   private val socket = new Socket()
   private lazy val in: InputStream = new BufferedInputStream(socket.getInputStream, 8192)
   private lazy val out: OutputStream = new BufferedOutputStream(socket.getOutputStream, 8192)

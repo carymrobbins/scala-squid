@@ -22,10 +22,10 @@ object PGParser extends RegexParsers {
   def expr: Parser[Expr] = bool | nul | int | ident | obj | tuple
 
   def tuple: Parser[Expr] = for {
-    _ <- tupleOpen
+    _ <- listOpen
     xs <- rep1(expr)
-    _ <- tupleClose
-  } yield Expr.Tuple(xs)
+    _ <- listClose
+  } yield Expr.List(xs)
 
   def void(p: Parser[_]): Parser[Unit] = p.map(_ => ())
 
@@ -41,8 +41,8 @@ object PGParser extends RegexParsers {
   val key = regex(":\\w+".r).map(_.tail)
   val objOpen = regex("\\{\\w+".r).map(_.tail)
   val objClose = void(literal("}"))
-  val tupleOpen = void(literal("("))
-  val tupleClose = void(literal(")"))
+  val listOpen = void(literal("("))
+  val listClose = void(literal(")"))
 
   sealed trait Expr
   object Expr {
@@ -50,8 +50,8 @@ object PGParser extends RegexParsers {
     final case class Int(value: scala.Int) extends Expr
     final case class Bool(value: Boolean) extends Expr
     final case class Ident(value: String) extends Expr
-    final case class Tuple(value: List[Expr]) extends Expr
-    final case class Obj(name: String, value: List[(String, Expr)]) extends Expr {
+    final case class List(value: scala.List[Expr]) extends Expr
+    final case class Obj(name: String, value: scala.List[(String, Expr)]) extends Expr {
       lazy val toMap = value.toMap
     }
   }

@@ -20,22 +20,41 @@ class PGParserSpec extends Specification { def is = s2"""
 //  """
 
   def selectSimple = PGProtocol.withConnection(INFO) { c =>
-    val q = parse(c, """
+    val fooBarOID = c.getTableOID("foo", "bar").getOrElse {
+      throw new RuntimeException("No oid found for foo.bar")
+    }
+
+    parse(c, """
       select id, quux from foo.bar
-    """)
-    sequence(
-      q.commandType === CmdType.Select,
-      q.querySource === QuerySource.Original,
-      q.canSetTag === true,
-      q.utilityStmt === None,
-      q.resultRelation === 0,
-      q.hasAggs === false,
-      q.hasWindowFuncs === false,
-      q.hasSubLinks === false,
-      q.hasDistinctOn === false,
-      q.hasRecursive === false,
-      q.hasModifyingCTE === false,
-      q.hasForUpdate === false
+    """) === Query(
+      commandType = CmdType.Select,
+      querySource = QuerySource.Original,
+      canSetTag = true,
+      utilityStmt = None,
+      resultRelation = 0,
+      hasAggs = false,
+      hasWindowFuncs = false,
+      hasSubLinks = false,
+      hasDistinctOn = false,
+      hasRecursive = false,
+      hasModifyingCTE = false,
+      hasForUpdate = false,
+      cteList = None,
+      rtable = List(
+        RangeTblEntry(
+          alias = None,
+          eref = Some(Alias(
+            aliasname = "bar",
+            colnames = Some(List("id", "quux"))
+          )),
+          rtekind = RTEKind.Relation,
+          relid = fooBarOID,
+          relkind = RelKind.Table,
+          lateral = false,
+          inh = true,
+          inFromCl = true
+        )
+      )
     )
   }
 
