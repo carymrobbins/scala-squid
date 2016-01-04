@@ -1,6 +1,7 @@
 package squid.parser
 
 import org.specs2._
+import org.specs2.matcher.MatchResult
 import squid.protocol.{PGConnection, OID, PGConnectInfo, PGProtocol}
 
 /** Tests for consuming parse trees from PostgreSQL. */
@@ -19,10 +20,22 @@ class PGParserSpec extends Specification { def is = s2"""
 //  """
 
   def selectSimple = PGProtocol.withConnection(INFO) { c =>
-    parse(c, """
+    val q = parse(c, """
       select id, quux from foo.bar
-    """).isSuccessful(
-      null
+    """)
+    sequence(
+      q.commandType === CmdType.Select,
+      q.querySource === QuerySource.Original,
+      q.canSetTag === true,
+      q.utilityStmt === None,
+      q.resultRelation === 0,
+      q.hasAggs === false,
+      q.hasWindowFuncs === false,
+      q.hasSubLinks === false,
+      q.hasDistinctOn === false,
+      q.hasRecursive === false,
+      q.hasModifyingCTE === false,
+      q.hasForUpdate === false
     )
   }
 
@@ -187,8 +200,13 @@ class PGParserSpec extends Specification { def is = s2"""
 //    )
 //  }
 
-  private def parse(c: PGConnection, sql: String, types: List[OID] = Nil) = {
-    PGParser.parse(c.describe(sql, types).parseTree)
+  def sequence[T](ms: MatchResult[T]*): MatchResult[Seq[T]] = MatchResult.sequence(ms)
+
+  private def parse(c: PGConnection, sql: String, types: List[OID] = Nil): Query = {
+    Query.fromExpr(PGParser.parse(c.describe(sql, types).parseTree).get).fold(
+      e => throw new RuntimeException(e),
+      identity
+    )
   }
 
   private val INFO = PGConnectInfo(
@@ -200,11 +218,4 @@ class PGParserSpec extends Specification { def is = s2"""
     database = "squid",
     debug = false
   )
-
-  private implicit final class RichParseResult[A](val underlying: PGParser.ParseResult[Query]) {
-    def isSuccessful(expected: Any) = underlying match {
-      case PGParser.Success(result, next) => (result === expected).toResult
-      case PGParser.NoSuccess(err, input) => failure.updateMessage(err)
-    }
-  }
 }
