@@ -20,17 +20,12 @@ class PGParserSpec extends Specification { def is = s2"""
 //  """
 
   def selectSimple = PGProtocol.withConnection(INFO) { c =>
-    val fooBarOID = c.getTableOID("foo", "bar").getOrElse {
-      throw new RuntimeException("No oid found for foo.bar")
-    }
-
     parse(c, """
       select id, quux from foo.bar
     """) === Query(
       commandType = CmdType.Select,
       querySource = QuerySource.Original,
       canSetTag = true,
-      utilityStmt = None,
       resultRelation = 0,
       hasAggs = false,
       hasWindowFuncs = false,
@@ -48,13 +43,59 @@ class PGParserSpec extends Specification { def is = s2"""
             colnames = Some(List("id", "quux"))
           )),
           rtekind = RTEKind.Relation,
-          relid = fooBarOID,
+          relid = tableOID(c, "foo", "bar"),
           relkind = RelKind.Table,
           lateral = false,
           inh = true,
           inFromCl = true
         )
-      )
+      ),
+      jointree = FromExpr(
+        fromlist = List(RangeTblRef(rtindex = 1)),
+        quals = None
+      ),
+      targetList = List(
+        TargetEntry(
+          expr = Var(
+            varno = 1,
+            varattno = 1,
+            vartype = c.getTypeOID("pg_catalog", "int4"),
+            vartypmod = -1,
+            varlevelsup = 0
+          ),
+          resno = 1,
+          resname = Some("id"),
+          ressortgroupref = 0,
+          resorigtbl = tableOID(c, "foo", "bar"),
+          resorigcol = 1
+        ),
+        TargetEntry(
+          expr = Var(
+            varno = 1,
+            varattno = 2,
+            vartype = c.getTypeOID("pg_catalog", "text"),
+            vartypmod = -1,
+            varlevelsup = 0
+          ),
+          resno = 2,
+          resname = Some("quux"),
+          ressortgroupref = 0,
+          resorigtbl = tableOID(c, "foo", "bar"),
+          resorigcol = 2
+        )
+      ),
+      withCheckOptions = None,
+      returningList = None,
+      groupClause = None,
+      havingQual = None,
+      windowClause = None,
+      distinctClause = None,
+      sortClause = None,
+      limitOffset = None,
+      limitCount = None,
+      rowMarks = None,
+      setOperations = None,
+      constraintDeps = None
     )
   }
 
@@ -222,10 +263,16 @@ class PGParserSpec extends Specification { def is = s2"""
   def sequence[T](ms: MatchResult[T]*): MatchResult[Seq[T]] = MatchResult.sequence(ms)
 
   private def parse(c: PGConnection, sql: String, types: List[OID] = Nil): Query = {
-    Query.fromExpr(PGParser.parse(c.describe(sql, types).parseTree).get).fold(
+    Query.decode(PGParser.parse(c.describe(sql, types).parseTree).get).fold(
       e => throw new RuntimeException(e),
       identity
     )
+  }
+
+  private def tableOID(c: PGConnection, schema: String, table: String): OID = {
+    c.getTableOID(schema, table).getOrElse {
+      throw new RuntimeException("No oid found for foo.bar")
+    }
   }
 
   private val INFO = PGConnectInfo(

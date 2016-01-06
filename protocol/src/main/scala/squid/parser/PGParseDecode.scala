@@ -2,7 +2,8 @@ package squid.parser
 
 import squid.protocol.OID
 
-import PGParser.Expr
+import PGParser.Atom
+import PGParseDecode.Combinators._
 
 sealed trait PGParseDecode[+A] {
   def fold[X](failure: String => X, success: A => X): X = this match {
@@ -24,6 +25,13 @@ sealed trait PGParseDecode[+A] {
     case e: PGParseDecode.Failure => PGParseDecode.Failure(f(e.message))
     case PGParseDecode.Success(v) => PGParseDecode.Success(v)
   }
+
+  def orElse[AA >: A](other: => PGParseDecode[AA]): PGParseDecode[AA] = this match {
+    case PGParseDecode.Success(v) => PGParseDecode.Success(v)
+    case _: PGParseDecode.Failure => other
+  }
+
+  def |[AA >: A](other: => PGParseDecode[AA]): PGParseDecode[AA] = orElse(other)
 }
 
 object PGParseDecode {
@@ -31,9 +39,9 @@ object PGParseDecode {
   final case class Success[A](value: A) extends PGParseDecode[A]
 
   object Combinators {
-    def obj(expr: Expr, name: String): PGParseDecode[Map[String, Expr]] = {
-      expr match {
-        case o: Expr.Obj =>
+    def obj(atom: Atom, name: String): PGParseDecode[Map[String, Atom]] = {
+      atom match {
+        case o: Atom.Obj =>
           if (o.name == name) {
             PGParseDecode.Success(o.toMap)
           } else {
@@ -44,44 +52,44 @@ object PGParseDecode {
       }
     }
 
-    def get(m: Map[String, Expr], k: String): PGParseDecode[Expr] = {
+    def get(m: Map[String, Atom], k: String): PGParseDecode[Atom] = {
       m.get(k) match {
         case None => PGParseDecode.Failure(s"Key not found '$k'")
         case Some(v) => PGParseDecode.Success(v)
       }
     }
 
-    def get[A](m: Map[String, Expr], k: String, f: Expr => PGParseDecode[A]): PGParseDecode[A] = {
-      get(m, k).flatMap(expr => f(expr).leftMap(e => s"For key '$k', $e"))
+    def get[A](m: Map[String, Atom], k: String, f: Atom => PGParseDecode[A]): PGParseDecode[A] = {
+      get(m, k).flatMap(atom => f(atom).leftMap(e => s"For key '$k', $e"))
     }
 
-    def int(expr: Expr): PGParseDecode[Int] = expr match {
-      case Expr.Int(n) => PGParseDecode.Success(n)
+    def int(atom: Atom): PGParseDecode[Int] = atom match {
+      case Atom.Int(n) => PGParseDecode.Success(n)
       case other => PGParseDecode.Failure(s"Expected int, got: $other")
     }
 
-    def bool(expr: Expr): PGParseDecode[Boolean] = expr match {
-      case Expr.Bool(b) => PGParseDecode.Success(b)
+    def bool(atom: Atom): PGParseDecode[Boolean] = atom match {
+      case Atom.Bool(b) => PGParseDecode.Success(b)
       case other => PGParseDecode.Failure(s"Expected bool, got: $other")
     }
 
-    def ident(expr: Expr): PGParseDecode[String] = expr match {
-      case Expr.Ident(s) => PGParseDecode.Success(s)
+    def ident(atom: Atom): PGParseDecode[String] = atom match {
+      case Atom.Ident(s) => PGParseDecode.Success(s)
       case other => PGParseDecode.Failure(s"Expected ident, got: $other")
     }
 
-    def oid(expr: Expr): PGParseDecode[OID] = expr match {
-      case Expr.Int(n) if n >= 0 => PGParseDecode.Success(OID(n))
+    def oid(atom: Atom): PGParseDecode[OID] = atom match {
+      case Atom.Int(n) if n >= 0 => PGParseDecode.Success(OID(n))
       case other => PGParseDecode.Failure(s"Expected oid, got: $other")
     }
 
-    def char(expr: Expr): PGParseDecode[Char] = expr match {
-      case Expr.Ident(s) if s.length == 1 => PGParseDecode.Success(s.head)
+    def char(atom: Atom): PGParseDecode[Char] = atom match {
+      case Atom.Ident(s) if s.length == 1 => PGParseDecode.Success(s.head)
       case other => PGParseDecode.Failure(s"Expected char, got: $other")
     }
 
-    def list[A](f: Expr => PGParseDecode[A])(expr: Expr): PGParseDecode[List[A]] = expr match {
-      case Expr.List(xs) =>
+    def list[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[List[A]] = atom match {
+      case Atom.List(xs) =>
         xs match {
           case Nil => PGParseDecode.Success(Nil)
           case head :: tail => tail.foldRight(f(head).map(List(_)))((x, acc) =>
@@ -92,15 +100,15 @@ object PGParseDecode {
       case other => PGParseDecode.Failure(s"Expected list, got: $other")
     }
 
-    def nullable[A](f: Expr => PGParseDecode[A])(expr: Expr): PGParseDecode[Option[A]] = {
-      expr match {
-        case Expr.Null => PGParseDecode.Success(None)
-        case _ => f(expr).map(Some(_))
+    def nullable[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[Option[A]] = {
+      atom match {
+        case Atom.Null => PGParseDecode.Success(None)
+        case _ => f(atom).map(Some(_))
       }
     }
 
-    def nul(expr: Expr): PGParseDecode[Option[Nothing]] = expr match {
-      case Expr.Null => PGParseDecode.Success(None)
+    def nul(atom: Atom): PGParseDecode[Option[Nothing]] = atom match {
+      case Atom.Null => PGParseDecode.Success(None)
       case other => PGParseDecode.Failure(s"Expected null, got: $other")
     }
 
@@ -111,7 +119,6 @@ object PGParseDecode {
   }
 }
 
-
 /**
   * Structure of the PostgreSQL Query AST
   * PostgreSQL Documentation: http://doxygen.postgresql.org/structQuery.html
@@ -120,7 +127,7 @@ final case class Query(
   commandType: CmdType,
   querySource: QuerySource,
   canSetTag: Boolean,
-  utilityStmt: Option[Nothing],
+  // utilityStmt: Option[Nothing],
   resultRelation: Int,
   hasAggs: Boolean,
   hasWindowFuncs: Boolean,
@@ -130,28 +137,27 @@ final case class Query(
   hasModifyingCTE: Boolean,
   hasForUpdate: Boolean,
   cteList: Option[Nothing],
-  rtable: List[RangeTblEntry]
-  //  jointree: ,
-  //  targetList: ,
-  //  withCheckOptions: ,
-  //  returningList: ,
-  //  groupClause: ,
-  //  havingQual: ,
-  //  windowClause: ,
-  //  distinctClause: ,
-  //  sortClause: ,
-  //  limitOffset: ,
-  //  limitCount: ,
-  //  rowMarks: ,
-  //  setOperations: ,
-  //  constraintDeps:
+  rtable: List[RangeTblEntry],
+  jointree: FromExpr,
+  targetList: List[TargetEntry],
+  withCheckOptions:  Option[Nothing],
+  returningList: Option[Nothing],
+  groupClause: Option[Nothing],
+  havingQual: Option[Nothing],
+  windowClause: Option[Nothing],
+  distinctClause: Option[Nothing],
+  sortClause: Option[Nothing],
+  limitOffset: Option[Nothing],
+  limitCount: Option[Nothing],
+  rowMarks: Option[Nothing],
+  setOperations: Option[Nothing],
+  constraintDeps: Option[Nothing]
 )
 
 object Query {
-  def fromExpr(expr: Expr): PGParseDecode[Query] = {
-    import PGParseDecode.Combinators._
+  def decode(atom: Atom): PGParseDecode[Query] = {
     for {
-      o <- obj(expr, "QUERY")
+      o <- obj(atom, "QUERY")
       commandType <- get(o, "commandType", int).flatMap(iso(CmdType))
       querySource <- get(o, "querySource", int).flatMap(iso(QuerySource))
       canSetTag <- get(o, "canSetTag", bool)
@@ -164,12 +170,26 @@ object Query {
       hasRecursive <- get(o, "hasRecursive", bool)
       hasModifyingCTE <- get(o, "hasModifyingCTE", bool)
       hasForUpdate <- get(o, "hasForUpdate", bool)
-      rtable <- get(o, "rtable", list(RangeTblEntry.fromExpr))
+      rtable <- get(o, "rtable", list(RangeTblEntry.decode))
+      jointree <- get(o, "jointree", FromExpr.decode)
+      targetList <- get(o, "targetList", list(TargetEntry.decode))
+      withCheckOptions <- get(o, "withCheckOptions", nul)
+      returningList <- get(o, "returningList", nul)
+      groupClause <- get(o, "groupClause", nul)
+      havingQual <- get(o, "havingQual", nul)
+      windowClause <- get(o, "windowClause", nul)
+      distinctClause <- get(o, "distinctClause", nul)
+      sortClause <- get(o, "sortClause", nul)
+      limitOffset <- get(o, "limitOffset", nul)
+      limitCount <- get(o, "limitCount", nul)
+      rowMarks <- get(o, "rowMarks", nul)
+      setOperations <- get(o, "setOperations", nul)
+      constraintDeps <- get(o, "constraintDeps", nul)
     } yield Query(
       commandType = commandType,
       querySource = querySource,
       canSetTag = canSetTag,
-      utilityStmt = utilityStmt,
+      // utilityStmt = utilityStmt,
       resultRelation = resultRelation,
       hasAggs = hasAggs,
       hasWindowFuncs = hasWindowFuncs,
@@ -179,7 +199,21 @@ object Query {
       hasModifyingCTE = hasModifyingCTE,
       hasForUpdate = hasForUpdate,
       cteList = None,
-      rtable = rtable
+      rtable = rtable,
+      jointree = jointree,
+      targetList = targetList,
+      withCheckOptions = withCheckOptions,
+      returningList = returningList,
+      groupClause = groupClause,
+      havingQual = havingQual,
+      windowClause = windowClause,
+      distinctClause = distinctClause,
+      sortClause = sortClause,
+      limitOffset = limitOffset,
+      limitCount = limitCount,
+      rowMarks = rowMarks,
+      setOperations = setOperations,
+      constraintDeps = constraintDeps
     )
   }
 }
@@ -242,12 +276,10 @@ sealed case class RangeTblEntry(
 )
 
 object RangeTblEntry {
-  import PGParseDecode.Combinators._
-
-  def fromExpr(expr: Expr): PGParseDecode[RangeTblEntry] = for {
-    o <- obj(expr, "RTE")
-    alias <- get(o, "alias", nullable(Alias.fromExpr))
-    eref <- get(o, "eref", nullable(Alias.fromExpr))
+  def decode(atom: Atom): PGParseDecode[RangeTblEntry] = for {
+    o <- obj(atom, "RTE")
+    alias <- get(o, "alias", nullable(Alias.decode))
+    eref <- get(o, "eref", nullable(Alias.decode))
     rtekind <- get(o, "rtekind", int).flatMap(iso(RTEKind))
     relid <- get(o, "relid", oid)
     relkind <- get(o, "relkind", char).flatMap(iso(RelKind))
@@ -300,14 +332,117 @@ final case class Alias(
 )
 
 object Alias {
-  import PGParseDecode.Combinators._
-
-  def fromExpr(expr: Expr): PGParseDecode[Alias] = for {
-    o <- obj(expr, "ALIAS")
+  def decode(atom: Atom): PGParseDecode[Alias] = for {
+    o <- obj(atom, "ALIAS")
     aliasname <- get(o, "aliasname", ident)
     colnames <- get(o, "colnames", nullable(list(ident)))
   } yield Alias(
     aliasname = aliasname,
     colnames = colnames
+  )
+}
+
+final case class FromExpr(
+  fromlist: List[RangeTblRef],
+  quals: Option[Nothing]
+)
+
+object FromExpr {
+  def decode(atom: Atom): PGParseDecode[FromExpr] = for {
+    o <- obj(atom, "FROMEXPR")
+    fromlist <- get(o, "fromlist", list(RangeTblRef.decode))
+    quals <- get(o, "quals", nul)
+  } yield FromExpr(
+    fromlist = fromlist,
+    quals = quals
+  )
+}
+
+final case class RangeTblRef(
+  rtindex: Int
+)
+
+object RangeTblRef {
+  def decode(atom: Atom): PGParseDecode[RangeTblRef] = for {
+    o <- obj(atom, "RANGETBLREF")
+    rtindex <- get(o, "rtindex", int)
+  } yield RangeTblRef(
+    rtindex = rtindex
+  )
+}
+
+final case class TargetEntry(
+  expr: Expr,
+  resno: Int,
+  resname: Option[String],
+  ressortgroupref: Int,
+  resorigtbl: OID,
+  resorigcol: Int
+  // resjunk: Boolean
+)
+
+object TargetEntry {
+  def decode(atom: Atom): PGParseDecode[TargetEntry] = for {
+    o <- obj(atom, "TARGETENTRY")
+    expr <- get(o, "expr", Expr.decode)
+    resno <- get(o, "resno", int)
+    resname <- get(o, "resname", nullable(ident))
+    ressortgroupref <- get(o, "ressortgroupref", int)
+    resorigtbl <- get(o, "resorigtbl", oid)
+    resorigcol <- get(o, "resorigcol", int)
+    // resjunk <- get(o, "resjunk", bool)
+  } yield TargetEntry(
+    expr = expr,
+    resno = resno,
+    resname = resname,
+    ressortgroupref = ressortgroupref,
+    resorigtbl = resorigtbl,
+    resorigcol = resorigcol
+    // resjunk = resjunk
+  )
+}
+
+sealed trait Expr
+
+object Expr {
+  def decode(atom: Atom): PGParseDecode[Expr] = {
+    Var.decode(atom)
+  }
+}
+
+sealed case class Var(
+  varno: Int,
+  varattno: Int,
+  vartype: OID,
+  vartypmod: Int,
+  // varcollid: Int,
+  varlevelsup: Int
+  // varnoold: Int,
+  // varoattno: Int,
+  // location: Int
+) extends Expr
+
+object Var {
+  def decode(atom: Atom): PGParseDecode[Var] = for {
+    o <- obj(atom, "VAR")
+    varno <- get(o, "varno", int)
+    varattno <- get(o, "varattno", int)
+    vartype <- get(o, "vartype", oid)
+    vartypmod <- get(o, "vartypmod", int)
+    // varcollid <- get(o, "varcollid", int)
+    varlevelsup <- get(o, "varlevelsup", int)
+    // varnoold <- get(o, "varnoold", int)
+    // varoattno <- get(o, "varoattno", int)
+    // location <- get(o, "location", int)
+  } yield Var(
+    varno = varno,
+    varattno = varattno,
+    vartype = vartype,
+    vartypmod = vartypmod,
+    // varcollid = varcollid,
+    varlevelsup = varlevelsup
+    // varnoold = varnoold,
+    // varoattno = varoattno,
+    // location = location
   )
 }
