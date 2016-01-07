@@ -134,12 +134,18 @@ object PGParseDecode {
     }
 
     /** Helper to convert Iso values to their complementary value. */
-    def iso[A <: Iso[K], K](c: IsoCompanion[A, K])(k: K): PGParseDecode[A] = c.up(k) match {
+    def iso[A <: PartialIso[K], K](c: PartialIsoCompanion[A, K])(k: K): PGParseDecode[A] = c.up(k) match {
       case None => PGParseDecode.Failure(s"Invalid $c value '$k'")
       case Some(v) => PGParseDecode.Success(v)
     }
   }
 }
+
+// Below are the various AST classes decoded into usable data structures.
+// NOTE: Many fields of the decoded AST classes have been left commented out.  These fields
+// are not very useful to us and introducing them makes testing the parse trees harder.
+// They are left in the source as a way of identifying fields that may be introduced later
+// if need be.
 
 /**
   * Structure of the PostgreSQL Query AST
@@ -240,14 +246,17 @@ object Query {
 }
 
 /**
-  * Trait for isomorphic values.  In other words, we should always be able to convert
-  * an Iso[A] to an A, and likewise an A to an Iso[A].
+  * Trait for partial isomorphisms.
+  * In other words, for any given Iso[A] we can get an A.
+  * Conversely, for only some A can we get an Iso[A].
+  * While this could be defined as a typeclass, for our uses this is actually simpler.
   */
-trait Iso[A] {
+trait PartialIso[A] {
   def down: A
 }
 
-trait IsoCompanion[A <: Iso[B], B] {
+/** Trait for companion to an Iso[A] to simplify going from A to Iso[A]. */
+trait PartialIsoCompanion[A <: PartialIso[B], B] {
   def values: List[A]
 
   def up(n: B): Option[A] = {
@@ -255,8 +264,8 @@ trait IsoCompanion[A <: Iso[B], B] {
   }
 }
 
-sealed abstract class CmdType(val down: Int) extends Iso[Int]
-object CmdType extends IsoCompanion[CmdType, Int] {
+sealed abstract class CmdType(val down: Int) extends PartialIso[Int]
+object CmdType extends PartialIsoCompanion[CmdType, Int] {
   case object Unknown extends CmdType(0)
   case object Select extends CmdType(1)
   case object Update extends CmdType(2)
@@ -270,8 +279,8 @@ object CmdType extends IsoCompanion[CmdType, Int] {
   )
 }
 
-sealed abstract class QuerySource(val down: Int) extends Iso[Int]
-object QuerySource extends IsoCompanion[QuerySource, Int] {
+sealed abstract class QuerySource(val down: Int) extends PartialIso[Int]
+object QuerySource extends PartialIsoCompanion[QuerySource, Int] {
   case object Original extends QuerySource(0)
   case object Parser extends QuerySource(1)
   case object InsteadRule extends QuerySource(2)
@@ -322,8 +331,8 @@ object RangeTblEntry {
   )
 }
 
-sealed abstract class RTEKind(val down: Int) extends Iso[Int]
-object RTEKind extends IsoCompanion[RTEKind, Int] {
+sealed abstract class RTEKind(val down: Int) extends PartialIso[Int]
+object RTEKind extends PartialIsoCompanion[RTEKind, Int] {
   case object Relation extends RTEKind(0)
   case object SubQuery extends RTEKind(1)
   case object Join extends RTEKind(2)
@@ -336,8 +345,8 @@ object RTEKind extends IsoCompanion[RTEKind, Int] {
   )
 }
 
-sealed abstract class RelKind(val down: Char) extends Iso[Char]
-object RelKind extends IsoCompanion[RelKind, Char] {
+sealed abstract class RelKind(val down: Char) extends PartialIso[Char]
+object RelKind extends PartialIsoCompanion[RelKind, Char] {
   case object Table extends RelKind('r')
   case object Index extends RelKind('i')
   case object Sequence extends RelKind('S')
