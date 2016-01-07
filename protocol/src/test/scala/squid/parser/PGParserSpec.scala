@@ -1,5 +1,6 @@
 package squid.parser
 
+import com.typesafe.config.ConfigFactory
 import org.specs2._
 import org.specs2.matcher.MatchResult
 import squid.protocol.{PGConnection, OID, PGConnectInfo, PGProtocol}
@@ -8,9 +9,8 @@ import squid.protocol.{PGConnection, OID, PGConnectInfo, PGProtocol}
 class PGParserSpec extends Specification { def is = s2"""
   PGParser should
     parse selectSimple $selectSimple
+    parse selectLiterals $selectLiterals
   """
-//    parse selectSimple $selectSimple
-//    parse selectLiterals $selectLiterals
 //    parse selectExprFromTable $selectExprFromTable
 //    parse selectFromJoin $selectFromJoin
 //    parse selectWhereParam $selectWhereParam
@@ -35,7 +35,7 @@ class PGParserSpec extends Specification { def is = s2"""
       hasModifyingCTE = false,
       hasForUpdate = false,
       cteList = None,
-      rtable = List(
+      rtable = Some(List(
         RangeTblEntry(
           alias = None,
           eref = Some(Alias(
@@ -49,9 +49,9 @@ class PGParserSpec extends Specification { def is = s2"""
           inh = true,
           inFromCl = true
         )
-      ),
+      )),
       jointree = FromExpr(
-        fromlist = List(RangeTblRef(rtindex = 1)),
+        fromlist = Some(List(RangeTblRef(rtindex = 1))),
         quals = None
       ),
       targetList = List(
@@ -99,10 +99,10 @@ class PGParserSpec extends Specification { def is = s2"""
     )
   }
 
-//  def selectLiterals = PGProtocol.withConnection(INFO) { c =>
-//    parse(c, """
-//      select 1, 2.0 as b, 'foo' as c, true as d, null as e
-//    """).isSuccessful(
+  def selectLiterals = PGProtocol.withConnection(INFO) { c =>
+    parse(c, """
+      select 1, 2.0 as b, 'foo' as c, true as d, null as e
+    """, Nil) === null
 //      Select(
 //        List(
 //          ResTarget(ConstInt(1)),
@@ -113,7 +113,7 @@ class PGParserSpec extends Specification { def is = s2"""
 //        )
 //      )
 //    )
-//  }
+  }
 
 //  def selectExprFromTable = {
 //    parse("""
@@ -263,8 +263,14 @@ class PGParserSpec extends Specification { def is = s2"""
   def sequence[T](ms: MatchResult[T]*): MatchResult[Seq[T]] = MatchResult.sequence(ms)
 
   private def parse(c: PGConnection, sql: String, types: List[OID] = Nil): Query = {
-    Query.decode(PGParser.parse(c.describe(sql, types).parseTree).get).fold(
-      e => throw new RuntimeException(e),
+    val parseTree = c.describe(sql, types).parseTree
+    val result = PGParser.parse(parseTree) match {
+      case PGParser.Success(r, _) => r
+      case e: PGParser.NoSuccess =>
+        throw new RuntimeException(s"PGParser.Error: $e\n\nFull parse tree: $parseTree")
+    }
+    Query.decode(result).fold(
+      e => throw new RuntimeException(s"Query.decode error: $e\n\nFull parse tree: $parseTree"),
       identity
     )
   }
@@ -275,13 +281,10 @@ class PGParserSpec extends Specification { def is = s2"""
     }
   }
 
-  private val INFO = PGConnectInfo(
-    host = "localhost",
-    port = 5432,
-    timeout = 5,
-    user = "squid",
-    password = "squid",
-    database = "squid",
-    debug = false
+  private val config = ConfigFactory.load()
+
+  private val INFO = PGConnectInfo.fromConfig(config).copy(
+    debug = false,
+    prettyPrintParseTrees = true
   )
 }

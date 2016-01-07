@@ -94,6 +94,12 @@ object PGParseDecode {
       case other => PGParseDecode.Failure(s"Expected ident, got: $other")
     }
 
+    def identOrMissing(atom: Atom): PGParseDecode[Option[String]] = atom match {
+      case Atom.Ident(s) => PGParseDecode.Success(Some(s))
+      case Atom.MissingIdent => PGParseDecode.Success(None)
+      case other => PGParseDecode.Failure(s"Expected ident, got: $other")
+    }
+
     /** Decodes an OID */
     def oid(atom: Atom): PGParseDecode[OID] = atom match {
       case Atom.Int(n) if n >= 0 => PGParseDecode.Success(OID(n))
@@ -108,15 +114,15 @@ object PGParseDecode {
 
     /** Repeatedly applies a decoding function within a list atom. */
     def list[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[List[A]] = atom match {
-      case Atom.List(xs) =>
-        xs match {
-          case Nil => PGParseDecode.Success(Nil)
-          case head :: tail => tail.foldRight(f(head).map(List(_)))((x, acc) =>
-            acc.flatMap(ys => f(x).map(ys :+ _))
-          )
-        }
-
+      case Atom.List(xs) => over(f)(xs)
       case other => PGParseDecode.Failure(s"Expected list, got: $other")
+    }
+
+    def over[A](f: Atom => PGParseDecode[A])(xs: List[Atom]): PGParseDecode[List[A]] = xs match {
+      case Nil => PGParseDecode.Success(Nil)
+      case head :: tail => tail.foldRight(f(head).map(List(_)))((x, acc) =>
+        acc.flatMap(ys => f(x).map(ys :+ _))
+      )
     }
 
     /** Returns None for a null atom, otherwise applies a decoding function. */
@@ -165,7 +171,7 @@ final case class Query(
   hasModifyingCTE: Boolean,
   hasForUpdate: Boolean,
   cteList: Option[Nothing],
-  rtable: List[RangeTblEntry],
+  rtable: Option[List[RangeTblEntry]],
   jointree: FromExpr,
   targetList: List[TargetEntry],
   withCheckOptions:  Option[Nothing],
@@ -197,7 +203,7 @@ object Query {
       hasRecursive <- get(o, "hasRecursive", bool)
       hasModifyingCTE <- get(o, "hasModifyingCTE", bool)
       hasForUpdate <- get(o, "hasForUpdate", bool)
-      rtable <- get(o, "rtable", list(RangeTblEntry.decode))
+      rtable <- get(o, "rtable", nullable(list(RangeTblEntry.decode)))
       jointree <- get(o, "jointree", FromExpr.decode)
       targetList <- get(o, "targetList", list(TargetEntry.decode))
       withCheckOptions <- get(o, "withCheckOptions", nul)
@@ -376,14 +382,14 @@ object Alias {
 }
 
 final case class FromExpr(
-  fromlist: List[RangeTblRef],
+  fromlist: Option[List[RangeTblRef]],
   quals: Option[Nothing]
 )
 
 object FromExpr {
   def decode(atom: Atom): PGParseDecode[FromExpr] = for {
     o <- obj(atom, "FROMEXPR")
-    fromlist <- get(o, "fromlist", list(RangeTblRef.decode))
+    fromlist <- get(o, "fromlist", nullable(list(RangeTblRef.decode)))
     quals <- get(o, "quals", nul)
   } yield FromExpr(
     fromlist = fromlist,
@@ -419,7 +425,7 @@ object TargetEntry {
     o <- obj(atom, "TARGETENTRY")
     expr <- get(o, "expr", Expr.decode)
     resno <- get(o, "resno", int)
-    resname <- get(o, "resname", nullable(ident))
+    resname <- get(o, "resname", nullable(identOrMissing)).map(_.flatten)
     ressortgroupref <- get(o, "ressortgroupref", int)
     resorigtbl <- get(o, "resorigtbl", oid)
     resorigcol <- get(o, "resorigcol", int)
@@ -439,7 +445,7 @@ sealed trait Expr
 
 object Expr {
   def decode(atom: Atom): PGParseDecode[Expr] = {
-    Var.decode(atom)
+    Var.decode(atom) | Const.decode(atom)
   }
 }
 
@@ -477,5 +483,33 @@ object Var {
     // varnoold = varnoold,
     // varoattno = varoattno,
     // location = location
+  )
+}
+
+final case class Const(
+  consttype: OID,
+  consttypmod: Int,
+  // constcollid: Int,
+  constlen: Int,
+  constbyval: Boolean,
+  constisnull: Boolean
+  // location: Int,
+  // constvalue:
+) extends Expr
+
+object Const {
+  def decode(atom: Atom): PGParseDecode[Const] = for {
+    o <- obj(atom, "CONST")
+    consttype <- get(o, "consttype", oid)
+    consttypmod <- get(o, "consttypmod", int)
+    constlen <- get(o, "constlen", int)
+    constbyval <- get(o, "constbyval", bool)
+    constisnull <- get(o, "constisnull", bool)
+  } yield Const(
+    consttype = consttype,
+    consttypmod = consttypmod,
+    constlen = constlen,
+    constbyval = constbyval,
+    constisnull = constisnull
   )
 }

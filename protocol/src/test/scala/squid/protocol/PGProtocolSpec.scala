@@ -9,6 +9,7 @@ class PGProtocolSpec extends Specification { def is = s2"""
     describe $describe
     preparedQuery $preparedQuery
     getTypeName $getTypeName
+    describeFilterByPK $describeFilterByPK
   """
 
   def startUp = withConnection { c =>
@@ -39,6 +40,15 @@ class PGProtocolSpec extends Specification { def is = s2"""
       PGTypeName("pg_catalog", "int4"),
       PGTypeName("pg_catalog", "text")
     )
+  }
+
+  def describeFilterByPK = withConnection { c =>
+    val result = c.describe("""
+      select id, quux
+      from foo.bar
+      where id = $1
+    """, List(c.getTypeOID("pg_catalog", "int4")))
+    result === null
   }
 
   private def withConnection[A](block: PGConnection => A): A = {

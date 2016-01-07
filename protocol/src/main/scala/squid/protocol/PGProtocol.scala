@@ -305,7 +305,7 @@ final class PGConnection(info: PGConnectInfo) {
     if (socket.isConnected) throw new RuntimeException("Already connected")
     log(s"Connecting to postgresql ${info.host}:${info.port}")
     socket.connect(new InetSocketAddress(info.host, info.port), info.timeout)
-    send(startupMessage(info))
+    send(startupMessage)
     flush()
     doAuth()
     readStartupMessages()
@@ -523,7 +523,7 @@ final class PGConnection(info: PGConnectInfo) {
   }
 
   /** The initial startup message sent upon .connect */
-  private def startupMessage(info: PGConnectInfo) = StartupMessage(
+  private lazy val startupMessage = StartupMessage(
     "user" -> info.user,
     "database" -> info.database,
     "client_encoding" -> "UTF8",
@@ -534,7 +534,7 @@ final class PGConnection(info: PGConnectInfo) {
     // These allow us to retrieve parse trees via NoticeResponse
     "client_min_messages" -> "debug1",
     "debug_print_parse" -> "on",
-    "debug_pretty_print" -> "off"
+    "debug_pretty_print" -> (if (info.prettyPrintParseTrees) "on" else "off")
   )
 
   private[this] var state: PGState = PGState.Unknown
@@ -559,7 +559,8 @@ final case class PGConnectInfo(
   user: String,
   password: String,
   database: String,
-  debug: Boolean = false
+  debug: Boolean = false,
+  prettyPrintParseTrees: Boolean = false
 )
 
 object PGConnectInfo {
