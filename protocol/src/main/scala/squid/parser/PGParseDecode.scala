@@ -5,6 +5,11 @@ import squid.protocol.OID
 import PGParser.Atom
 import PGParseDecode.Combinators._
 
+/**
+  * Describes the result of of decoding a value from a PGParser.Atom
+  * There are two constructors: Failure and Success.
+  * This trait can be seen as an analog of Either.
+  */
 sealed trait PGParseDecode[+A] {
   def fold[X](failure: String => X, success: A => X): X = this match {
     case PGParseDecode.Failure(msg) => failure(msg)
@@ -31,6 +36,7 @@ sealed trait PGParseDecode[+A] {
     case _: PGParseDecode.Failure => other
   }
 
+  /** Alias for .orElse */
   def |[AA >: A](other: => PGParseDecode[AA]): PGParseDecode[AA] = orElse(other)
 }
 
@@ -38,7 +44,12 @@ object PGParseDecode {
   final case class Failure(message: String) extends PGParseDecode[Nothing]
   final case class Success[A](value: A) extends PGParseDecode[A]
 
+  /**
+    * Helpful combinators for decoding a value from a PGParser.Atom
+    * These are imported at the top of this file to simplify decoding logic.
+    */
   object Combinators {
+    /** Decodes an object */
     def obj(atom: Atom, name: String): PGParseDecode[Map[String, Atom]] = {
       atom match {
         case o: Atom.Obj =>
@@ -52,6 +63,7 @@ object PGParseDecode {
       }
     }
 
+    /** Gets an Atom from a Map requiring the given key. */
     def get(m: Map[String, Atom], k: String): PGParseDecode[Atom] = {
       m.get(k) match {
         case None => PGParseDecode.Failure(s"Key not found '$k'")
@@ -59,35 +71,42 @@ object PGParseDecode {
       }
     }
 
+    /** Same as .get above except also decodes the Atom found. */
     def get[A](m: Map[String, Atom], k: String, f: Atom => PGParseDecode[A]): PGParseDecode[A] = {
       get(m, k).flatMap(atom => f(atom).leftMap(e => s"For key '$k', $e"))
     }
 
+    /** Decodes an int */
     def int(atom: Atom): PGParseDecode[Int] = atom match {
       case Atom.Int(n) => PGParseDecode.Success(n)
       case other => PGParseDecode.Failure(s"Expected int, got: $other")
     }
 
+    /** Decodes a boolean */
     def bool(atom: Atom): PGParseDecode[Boolean] = atom match {
       case Atom.Bool(b) => PGParseDecode.Success(b)
       case other => PGParseDecode.Failure(s"Expected bool, got: $other")
     }
 
+    /** Decodes an identifier */
     def ident(atom: Atom): PGParseDecode[String] = atom match {
       case Atom.Ident(s) => PGParseDecode.Success(s)
       case other => PGParseDecode.Failure(s"Expected ident, got: $other")
     }
 
+    /** Decodes an OID */
     def oid(atom: Atom): PGParseDecode[OID] = atom match {
       case Atom.Int(n) if n >= 0 => PGParseDecode.Success(OID(n))
       case other => PGParseDecode.Failure(s"Expected oid, got: $other")
     }
 
+    /** Decodes a single character, failing if more than one character is found */
     def char(atom: Atom): PGParseDecode[Char] = atom match {
       case Atom.Ident(s) if s.length == 1 => PGParseDecode.Success(s.head)
       case other => PGParseDecode.Failure(s"Expected char, got: $other")
     }
 
+    /** Repeatedly applies a decoding function within a list atom. */
     def list[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[List[A]] = atom match {
       case Atom.List(xs) =>
         xs match {
@@ -100,6 +119,7 @@ object PGParseDecode {
       case other => PGParseDecode.Failure(s"Expected list, got: $other")
     }
 
+    /** Returns None for a null atom, otherwise applies a decoding function. */
     def nullable[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[Option[A]] = {
       atom match {
         case Atom.Null => PGParseDecode.Success(None)
@@ -107,11 +127,13 @@ object PGParseDecode {
       }
     }
 
+    /** Decode a null atom to None, failing for non-null atoms. */
     def nul(atom: Atom): PGParseDecode[Option[Nothing]] = atom match {
       case Atom.Null => PGParseDecode.Success(None)
       case other => PGParseDecode.Failure(s"Expected null, got: $other")
     }
 
+    /** Helper to convert Iso values to their complementary value. */
     def iso[A <: Iso[K], K](c: IsoCompanion[A, K])(k: K): PGParseDecode[A] = c.up(k) match {
       case None => PGParseDecode.Failure(s"Invalid $c value '$k'")
       case Some(v) => PGParseDecode.Success(v)
@@ -161,7 +183,6 @@ object Query {
       commandType <- get(o, "commandType", int).flatMap(iso(CmdType))
       querySource <- get(o, "querySource", int).flatMap(iso(QuerySource))
       canSetTag <- get(o, "canSetTag", bool)
-      utilityStmt <- get(o, "utilityStmt", nul)
       resultRelation <- get(o, "resultRelation", int)
       hasAggs <- get(o, "hasAggs", bool)
       hasWindowFuncs <- get(o, "hasWindowFuncs", bool)
@@ -218,7 +239,10 @@ object Query {
   }
 }
 
-/** Helper to convert to/from some enum-like value. */
+/**
+  * Trait for isomorphic values.  In other words, we should always be able to convert
+  * an Iso[A] to an A, and likewise an A to an Iso[A].
+  */
 trait Iso[A] {
   def down: A
 }
