@@ -22,19 +22,7 @@ class PGParserSpec extends Specification { def is = s2"""
   def selectSimple = PGProtocol.withConnection(INFO) { c =>
     parse(c, """
       select id, quux from foo.bar
-    """) === Query(
-      commandType = CmdType.Select,
-      querySource = QuerySource.Original,
-      canSetTag = true,
-      resultRelation = 0,
-      hasAggs = false,
-      hasWindowFuncs = false,
-      hasSubLinks = false,
-      hasDistinctOn = false,
-      hasRecursive = false,
-      hasModifyingCTE = false,
-      hasForUpdate = false,
-      cteList = None,
+    """) === defaultQuery.copy(
       rtable = Some(List(
         RangeTblEntry(
           alias = None,
@@ -60,7 +48,6 @@ class PGParserSpec extends Specification { def is = s2"""
             varno = 1,
             varattno = 1,
             vartype = c.getTypeOID("pg_catalog", "int4"),
-            vartypmod = -1,
             varlevelsup = 0
           ),
           resno = 1,
@@ -74,7 +61,6 @@ class PGParserSpec extends Specification { def is = s2"""
             varno = 1,
             varattno = 2,
             vartype = c.getTypeOID("pg_catalog", "text"),
-            vartypmod = -1,
             varlevelsup = 0
           ),
           resno = 2,
@@ -83,36 +69,74 @@ class PGParserSpec extends Specification { def is = s2"""
           resorigtbl = tableOID(c, "foo", "bar"),
           resorigcol = 2
         )
-      ),
-      withCheckOptions = None,
-      returningList = None,
-      groupClause = None,
-      havingQual = None,
-      windowClause = None,
-      distinctClause = None,
-      sortClause = None,
-      limitOffset = None,
-      limitCount = None,
-      rowMarks = None,
-      setOperations = None,
-      constraintDeps = None
+      )
     )
   }
 
   def selectLiterals = PGProtocol.withConnection(INFO) { c =>
     parse(c, """
       select 1, 2.0 as b, 'foo' as c, true as d, null as e
-    """, Nil) === null
-//      Select(
-//        List(
-//          ResTarget(ConstInt(1)),
-//          ResTarget(ConstDecimal(2.0), Some("b")),
-//          ResTarget(ConstString("foo"), Some("c")),
-//          ResTarget(Consts.TRUE, Some("d")),
-//          ResTarget(ConstNull, Some("e"))
-//        )
-//      )
-//    )
+    """, Nil) === defaultQuery.copy(
+      targetList = List(
+        TargetEntry(
+          expr = Const(
+            consttype = c.getTypeOID("pg_catalog", "int4"),
+            constisnull = false
+          ),
+          resno = 1,
+          resname = None,
+          ressortgroupref = 0,
+          resorigtbl = OID(0),
+          resorigcol = 0
+        ),
+        TargetEntry(
+          expr = Const(
+            // text literals are typed as unknown
+            consttype = c.getTypeOID("pg_catalog", "numeric"),
+            constisnull = false
+          ),
+          resno = 2,
+          resname = Some("b"),
+          ressortgroupref = 0,
+          resorigtbl = OID(0),
+          resorigcol = 0
+        ),
+        TargetEntry(
+          expr = Const(
+            consttype = c.getTypeOID("pg_catalog", "unknown"),
+            constisnull = false
+          ),
+          resno = 3,
+          resname = Some("c"),
+          ressortgroupref = 0,
+          resorigtbl = OID(0),
+          resorigcol = 0
+        ),
+
+        TargetEntry(
+          expr = Const(
+            consttype = c.getTypeOID("pg_catalog", "bool"),
+            constisnull = false
+          ),
+          resno = 4,
+          resname = Some("d"),
+          ressortgroupref = 0,
+          resorigtbl = OID(0),
+          resorigcol = 0
+        ),
+        TargetEntry(
+          expr = Const(
+            consttype = c.getTypeOID("pg_catalog", "unknown"),
+            constisnull = true
+          ),
+          resno = 5,
+          resname = Some("e"),
+          ressortgroupref = 0,
+          resorigtbl = OID(0),
+          resorigcol = 0
+        )
+      )
+    )
   }
 
 //  def selectExprFromTable = {
@@ -280,6 +304,35 @@ class PGParserSpec extends Specification { def is = s2"""
       throw new RuntimeException("No oid found for foo.bar")
     }
   }
+
+  private val defaultQuery = Query(
+    commandType = CmdType.Select,
+    querySource = QuerySource.Original,
+    resultRelation = 0,
+    hasAggs = false,
+    hasWindowFuncs = false,
+    hasSubLinks = false,
+    hasDistinctOn = false,
+    hasRecursive = false,
+    hasModifyingCTE = false,
+    hasForUpdate = false,
+    cteList = None,
+    rtable = None,
+    jointree = FromExpr(None, None),
+    targetList = Nil,
+    withCheckOptions = None,
+    returningList = None,
+    groupClause = None,
+    havingQual = None,
+    windowClause = None,
+    distinctClause = None,
+    sortClause = None,
+    limitOffset = None,
+    limitCount = None,
+    rowMarks = None,
+    setOperations = None,
+    constraintDeps = None
+  )
 
   private val config = ConfigFactory.load()
 

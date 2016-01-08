@@ -120,7 +120,7 @@ object PGParseDecode {
 
     def over[A](f: Atom => PGParseDecode[A])(xs: List[Atom]): PGParseDecode[List[A]] = xs match {
       case Nil => PGParseDecode.Success(Nil)
-      case head :: tail => tail.foldRight(f(head).map(List(_)))((x, acc) =>
+      case head :: tail => tail.foldLeft(f(head).map(List(_)))((acc, x) =>
         acc.flatMap(ys => f(x).map(ys :+ _))
       )
     }
@@ -160,7 +160,7 @@ object PGParseDecode {
 final case class Query(
   commandType: CmdType,
   querySource: QuerySource,
-  canSetTag: Boolean,
+  // canSetTag: Boolean,
   // utilityStmt: Option[Nothing],
   resultRelation: Int,
   hasAggs: Boolean,
@@ -194,7 +194,7 @@ object Query {
       o <- obj(atom, "QUERY")
       commandType <- get(o, "commandType", int).flatMap(iso(CmdType))
       querySource <- get(o, "querySource", int).flatMap(iso(QuerySource))
-      canSetTag <- get(o, "canSetTag", bool)
+      // canSetTag <- get(o, "canSetTag", bool)
       resultRelation <- get(o, "resultRelation", int)
       hasAggs <- get(o, "hasAggs", bool)
       hasWindowFuncs <- get(o, "hasWindowFuncs", bool)
@@ -221,7 +221,7 @@ object Query {
     } yield Query(
       commandType = commandType,
       querySource = querySource,
-      canSetTag = canSetTag,
+      // canSetTag = canSetTag,
       // utilityStmt = utilityStmt,
       resultRelation = resultRelation,
       hasAggs = hasAggs,
@@ -453,7 +453,7 @@ sealed case class Var(
   varno: Int,
   varattno: Int,
   vartype: OID,
-  vartypmod: Int,
+  // vartypmod: Int,
   // varcollid: Int,
   varlevelsup: Int
   // varnoold: Int,
@@ -467,7 +467,7 @@ object Var {
     varno <- get(o, "varno", int)
     varattno <- get(o, "varattno", int)
     vartype <- get(o, "vartype", oid)
-    vartypmod <- get(o, "vartypmod", int)
+    // vartypmod <- get(o, "vartypmod", int)
     // varcollid <- get(o, "varcollid", int)
     varlevelsup <- get(o, "varlevelsup", int)
     // varnoold <- get(o, "varnoold", int)
@@ -477,7 +477,7 @@ object Var {
     varno = varno,
     varattno = varattno,
     vartype = vartype,
-    vartypmod = vartypmod,
+    // vartypmod = vartypmod,
     // varcollid = varcollid,
     varlevelsup = varlevelsup
     // varnoold = varnoold,
@@ -488,10 +488,10 @@ object Var {
 
 final case class Const(
   consttype: OID,
-  consttypmod: Int,
+  // consttypmod: Int,
   // constcollid: Int,
-  constlen: Int,
-  constbyval: Boolean,
+  // constlen: Int,
+  // constbyval: Boolean,
   constisnull: Boolean
   // location: Int,
   // constvalue:
@@ -502,14 +502,14 @@ object Const {
     o <- obj(atom, "CONST")
     consttype <- get(o, "consttype", oid)
     consttypmod <- get(o, "consttypmod", int)
-    constlen <- get(o, "constlen", int)
-    constbyval <- get(o, "constbyval", bool)
+    // constlen <- get(o, "constlen", int)
+    // constbyval <- get(o, "constbyval", bool)
     constisnull <- get(o, "constisnull", bool)
   } yield Const(
     consttype = consttype,
-    consttypmod = consttypmod,
-    constlen = constlen,
-    constbyval = constbyval,
+    // consttypmod = consttypmod,
+    // constlen = constlen,
+    // constbyval = constbyval,
     constisnull = constisnull
   )
 }
