@@ -2,6 +2,8 @@ package squid.protocol
 
 import scala.collection.mutable
 
+import squid.util.StreamAssertions
+
 /** Manages fetching and caching PostgreSQL table names/OIDs. */
 final class PGTablesManager(query: PGQueryExecutor) {
 
@@ -12,7 +14,7 @@ final class PGTablesManager(query: PGQueryExecutor) {
       case Some(oid) => Some(oid)
 
       case None =>
-        query.prepared(
+        val result = query.prepared(
           """
             select pg_class.oid
             from pg_catalog.pg_class, pg_catalog.pg_namespace
@@ -21,14 +23,11 @@ final class PGTablesManager(query: PGQueryExecutor) {
                   pg_class.relname = $2
           """,
           List(PGParam.from(schema), PGParam.from(table))
-        ).flatten match {
-          case List(v) =>
-            val oid = v.as[OID]
-            cache.update(tableRef, oid)
-            Some(oid)
-
-          case Nil => None
-          case other => throw new RuntimeException(s"Expected zero or one element, got: $other")
+        ).flatten
+        StreamAssertions.zeroOrOne(result).map { v =>
+          val oid = v.as[OID]
+          cache.update(tableRef, oid)
+          oid
         }
     }
   }

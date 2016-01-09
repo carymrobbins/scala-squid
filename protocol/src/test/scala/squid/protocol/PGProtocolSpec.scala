@@ -25,7 +25,7 @@ class PGProtocolSpec extends Specification { def is = s2"""
   }
 
   def preparedQuery = withConnection { c =>
-    c.query.prepared("select * from foo.bar", Nil, Nil) === List(
+    c.query.prepared("select * from foo.bar", Nil, Nil).toList === List(
       List(PGValue.Text("1"), PGValue.Text("alpha")),
       List(PGValue.Text("2"), PGValue.Null),
       List(PGValue.Text("3"), PGValue.Text("charlie"))

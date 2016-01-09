@@ -5,6 +5,7 @@ import scala.collection.mutable
 
 import PGBackendMessage._
 import PGFrontendMessage._
+import squid.util.StreamAssertions
 
 /** Manages execution of backend queries. */
 final class PGQueryExecutor(socket: PGSocket) {
@@ -54,7 +55,7 @@ final class PGQueryExecutor(socket: PGSocket) {
   /** Executes a prepared query and returns its results int a list. */
   def prepared
       (query: String, params: List[PGParam], binaryCols: List[Boolean] = Nil)
-      : List[List[PGValue]] = {
+      : Stream[List[PGValue]] = {
     bind(query, params, binaryCols)
     socket.send(Execute("", 0)) // zero for "fetch all rows"
     socket.send(Flush)
@@ -76,7 +77,7 @@ final class PGQueryExecutor(socket: PGSocket) {
 
         case other => throw new RuntimeException(s"Unexpected row message: $other")
       }
-    }.toList
+    }.toStream
   }
 
   /** Binds a prepared statement. */
@@ -114,8 +115,12 @@ final class PGQueryExecutor(socket: PGSocket) {
           val result = prepared(
             "select attnotnull from pg_catalog.pg_attribute where attrelid = $1 and attnum = $2",
             List(PGParam.from(table), PGParam.from(colNum))
-          )
-          val nullable = result.flatten.headOption.map(v => !v.as[Boolean]).getOrElse(true)
+          ).flatten
+          // val nullable = result.flatten ma(v => !v.as[Boolean]).getOrElse(true)
+          val nullable = StreamAssertions.zeroOrOne(result) match {
+            case None => true
+            case Some(v) => !v.as[Boolean]
+          }
           columnNullables.update(colRef, nullable)
           nullable
       })
