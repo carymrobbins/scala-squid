@@ -10,6 +10,7 @@ class PGParserSpec extends Specification { def is = s2"""
   PGParser should
     parse selectSimple $selectSimple
     parse selectLiterals $selectLiterals
+    parse selectWherePK $selectWherePK
   """
 //    parse selectExprFromTable $selectExprFromTable
 //    parse selectFromJoin $selectFromJoin
@@ -24,25 +25,16 @@ class PGParserSpec extends Specification { def is = s2"""
       select id, quux from foo.bar
     """) === defaultQuery.copy(
       rtable = Some(List(
-        RangeTblEntry(
-          alias = None,
-          eref = Some(Alias(
-            aliasname = "bar",
-            colnames = Some(List("id", "quux"))
-          )),
-          rtekind = RTEKind.Relation,
-          relid = tableOID(c, "foo", "bar"),
-          relkind = RelKind.Table,
-          lateral = false,
-          inh = true,
-          inFromCl = true
+        defaultRangeTblEntry.copy(
+          eref = Some(Alias(aliasname = "bar", colnames = Some(List("id", "quux")))),
+          relid = tableOID(c, "foo", "bar")
         )
       )),
       jointree = FromExpr(
         fromlist = Some(List(RangeTblRef(rtindex = 1))),
         quals = None
       ),
-      targetList = List(
+      targetList = Some(List(
         TargetEntry(
           expr = Var(
             varno = 1,
@@ -69,7 +61,7 @@ class PGParserSpec extends Specification { def is = s2"""
           resorigtbl = tableOID(c, "foo", "bar"),
           resorigcol = 2
         )
-      )
+      ))
     )
   }
 
@@ -77,7 +69,7 @@ class PGParserSpec extends Specification { def is = s2"""
     parse(c, """
       select 1, 2.0 as b, 'foo' as c, true as d, null as e
     """, Nil) === defaultQuery.copy(
-      targetList = List(
+      targetList = Some(List(
         TargetEntry(
           expr = Const(
             consttype = c.getTypeOID("pg_catalog", "int4"),
@@ -135,6 +127,31 @@ class PGParserSpec extends Specification { def is = s2"""
           resorigtbl = OID(0),
           resorigcol = 0
         )
+      ))
+    )
+  }
+
+  def selectWherePK = PGProtocol.withConnection(INFO) { c =>
+    val result = parse(c, """
+      select from foo.bar where id = $1
+    """, Nil)
+
+    val whereExpr = result.jointree.quals.get.asInstanceOf[OpExpr]
+
+    sequence(
+      c.getOpName(whereExpr.opno).op === "=",
+
+      whereExpr.args._1 === Var(
+        varno = 1,
+        varattno = 1,
+        vartype = c.getTypeOID("pg_catalog", "int4"),
+        varlevelsup = 0
+      ),
+
+      whereExpr.args._2 === Param(
+        paramkind = ParamKind.Extern,
+        paramid = 1,
+        paramtype = c.getTypeOID("pg_catalog", "int4")
       )
     )
   }
@@ -143,33 +160,7 @@ class PGParserSpec extends Specification { def is = s2"""
 //    parse("""
 //      select a + b as c, f(d), *
 //      from foo.bar as baz(a, b, d)
-//    """).isSuccessful(
-//      Select(
-//        List(
-//          ResTarget(
-//            AExpr(
-//              ColumnRef.named("a"),
-//              List("+"),
-//              ColumnRef.named("b")
-//            ),
-//            Some("c")
-//          ),
-//          ResTarget(
-//            FuncCall(List("f"), Some(List(ColumnRef.named("d"))))
-//          ),
-//          ResTarget(
-//            ColumnRef(List(FieldPart.Star))
-//          )
-//        ),
-//        fromClause = Some(List(
-//          RangeVar(
-//            relname = "bar",
-//            schemaname = Some("foo"),
-//            alias = Some(Alias("baz", Some(List("a", "b", "d"))))
-//          )
-//        ))
-//      )
-//    )
+//    """)
 //  }
 //
 //  def selectFromJoin = {
@@ -179,35 +170,7 @@ class PGParserSpec extends Specification { def is = s2"""
 //      join c using (d)
 //      left join e on b.a = e.g
 //      natural right join x
-//    """).isSuccessful(
-//      Select(
-//        List(ResTarget(ColumnRef.named("a"))),
-//        fromClause = Some(List(
-//          JoinExpr(
-//            JoinType.Right,
-//            JoinExpr(
-//              JoinType.Left,
-//              JoinExpr(
-//                JoinType.Inner,
-//                RangeVar("b"),
-//                RangeVar("c"),
-//                usingClause = Some(List("d"))
-//              ),
-//              RangeVar("e"),
-//              quals = Option(
-//                AExpr(
-//                  ColumnRef.named("b", "a"),
-//                  List("="),
-//                  ColumnRef.named("e", "g")
-//                )
-//              )
-//            ),
-//            RangeVar("x"),
-//            isNatural = true
-//          )
-//        ))
-//      )
-//    )
+//    """)
 //  }
 //
 //  def selectWhereParam = {
@@ -215,58 +178,19 @@ class PGParserSpec extends Specification { def is = s2"""
 //      select a
 //      from b
 //      where c between $1 and $2
-//    """).isSuccessful(
-//      Select(
-//        List(ResTarget(ColumnRef.named("a"))),
-//        fromClause = Some(List(RangeVar("b"))),
-//        whereClause = Some(
-//          AExprAnd(
-//            AExpr(
-//              ColumnRef.named("c"),
-//              List(">="),
-//              ParamRef(1)
-//            ),
-//            AExpr(
-//              ColumnRef.named("c"),
-//              List("<="),
-//              ParamRef(2)
-//            )
-//          )
-//        )
-//      )
-//    )
+//    """)
 //  }
 //
 //  def selectAndOrNot = {
 //    parse("""
 //      select not a and b or c
-//    """).isSuccessful(
-//      Select(
-//        List(ResTarget(
-//          AExprOr(
-//            AExprAnd(
-//              AExprNot(ColumnRef.named("a")),
-//              ColumnRef.named("b")
-//            ),
-//            ColumnRef.named("c")
-//          )
-//        ))
-//      )
-//    )
+//    """)
 //  }
 //
 //  def selectCoalesce = {
 //    parse("""
 //      select coalesce(a, b, c, 1)
-//    """).isSuccessful(
-//      Select(
-//        List(ResTarget(Coalesce(List(
-//          ColumnRef.named("a"),
-//          ColumnRef.named("b"),
-//          ColumnRef.named("c"),
-//          ConstInt(1)
-//        ))))
-//      )
+//    """)
 //    )
 //  }
 //
@@ -275,13 +199,7 @@ class PGParserSpec extends Specification { def is = s2"""
 //      select a
 //      from b
 //      where c is distinct from d
-//    """).isSuccessful(
-//      Select(
-//        List(ResTarget(ColumnRef.named("a"))),
-//        fromClause = Some(List(RangeVar("b"))),
-//        whereClause = Some(AExprDistinct(ColumnRef.named("c"), ColumnRef.named("d")))
-//      )
-//    )
+//    """)
 //  }
 
   def sequence[T](ms: MatchResult[T]*): MatchResult[Seq[T]] = MatchResult.sequence(ms)
@@ -319,7 +237,7 @@ class PGParserSpec extends Specification { def is = s2"""
     cteList = None,
     rtable = None,
     jointree = FromExpr(None, None),
-    targetList = Nil,
+    targetList = None,
     withCheckOptions = None,
     returningList = None,
     groupClause = None,
@@ -332,6 +250,17 @@ class PGParserSpec extends Specification { def is = s2"""
     rowMarks = None,
     setOperations = None,
     constraintDeps = None
+  )
+
+  private val defaultRangeTblEntry =  RangeTblEntry(
+    alias = None,
+    eref = None,
+    rtekind = RTEKind.Relation,
+    relid = OID(0),
+    relkind = RelKind.Table,
+    lateral = false,
+    inh = true,
+    inFromCl = true
   )
 
   private val config = ConfigFactory.load()

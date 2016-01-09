@@ -127,6 +127,8 @@ final case class DescribeColumn(name: String, colType: OID, nullable: Boolean)
 // TODO: Replace with PGType
 final case class PGTypeName(namespace: String, typeName: String)
 
+final case class PGOp(namespace: String, op: String)
+
 /** The exception class raised from PGConnection upon protocol errors. */
 final case class PGProtocolError(msg: PGBackendMessage.ErrorResponse) extends Exception {
   override def getMessage: String = msg.toString
@@ -179,10 +181,10 @@ final class PGConnection(info: PGConnectInfo) {
     DescribeResult(paramTypes, cols, parseTree)
   }
 
-  /** Executes a prepared query and streams its results. */
+  /** Executes a prepared query and returns its results int a list. */
   def preparedQuery
-      (query: String, params: List[PGParam], binaryCols: List[Boolean])
-      : Stream[List[PGValue]] = {
+      (query: String, params: List[PGParam], binaryCols: List[Boolean] = Nil)
+      : List[List[PGValue]] = {
     bind(query, params, binaryCols)
     send(Execute("", 0)) // zero for "fetch all rows"
     send(Flush)
@@ -204,7 +206,7 @@ final class PGConnection(info: PGConnectInfo) {
 
         case other => throw new RuntimeException(s"Unexpected row message: $other")
       }
-    }.toStream
+    }.toList
   }
 
   /** Gets the system OID for the provided table. */
@@ -221,12 +223,15 @@ final class PGConnection(info: PGConnectInfo) {
                   pg_namespace.nspname = $1 and
                   pg_class.relname = $2
           """,
-          List(PGParam.from(schema), PGParam.from(table)),
-          binaryCols = Nil
-        ).flatten.headOption.map { v =>
-          val oid = v.as[OID]
-          tableOIDs.update((schema, table), oid)
-          oid
+          List(PGParam.from(schema), PGParam.from(table))
+        ).flatten match {
+          case List(v) =>
+            val oid = v.as[OID]
+            tableOIDs.update((schema, table), oid)
+            Some(oid)
+
+          case Nil => None
+          case other => throw new RuntimeException(s"Expected zero or one element, got: $other")
         }
     }
   }
@@ -255,14 +260,15 @@ final class PGConnection(info: PGConnectInfo) {
                   pg_namespace.nspname = $1 and
                   pg_type.typname = $2
           """,
-          List(PGParam.from(namespace), PGParam.from(typeName)),
-          binaryCols = Nil
-        ).flatten.headOption.map { v =>
-          val oid = v.as[OID]
-          cacheTypeOID(namespace, typeName, oid)
-          oid
-        }.getOrElse {
-          throw new RuntimeException(s"pg_type not found: $namespace.$typeName")
+          List(PGParam.from(namespace), PGParam.from(typeName))
+        ).flatten match {
+          case List(v) =>
+            val oid = v.as[OID]
+            cacheTypeOID(namespace, typeName, oid)
+            oid
+
+          case Nil => throw new RuntimeException(s"pg_type not found: $namespace.$typeName")
+          case other => throw new RuntimeException(s"Expected one element, got: $other")
         }
     }
   }
@@ -282,14 +288,43 @@ final class PGConnection(info: PGConnectInfo) {
           """,
           List(PGParam.from(oid)),
           binaryCols = Nil
-        ).flatten.toList match {
+        ).flatten match {
           case List(pgNamespace, pgTypeName) =>
             val namespace = pgNamespace.as[String]
             val typeName = pgTypeName.as[String]
             cacheTypeOID(namespace, typeName, oid)
             PGTypeName(namespace, typeName)
 
-          case xs => throw new RuntimeException(s"Expected a list with two elements, got: $xs")
+          case Nil => throw new RuntimeException(s"pg_type not found: $oid")
+          case xs => throw new RuntimeException(s"Expected only two elements, got: $xs")
+        }
+    }
+  }
+
+  /** Gets the qualified operator name for the given OID. */
+  def getOpName(oid: OID): PGOp = {
+    oidOps.get(oid) match {
+      case Some((namespace, op)) => PGOp(namespace, op)
+
+      case None =>
+        preparedQuery(
+          """
+            select pg_namespace.nspname, pg_operator.oprname
+            from pg_catalog.pg_operator, pg_catalog.pg_namespace
+            where pg_operator.oprnamespace = pg_namespace.oid and
+                  pg_operator.oid = $1
+          """,
+          List(PGParam.from(oid)),
+          binaryCols = Nil
+        ).flatten match {
+          case List(pgNamespace, pgOp) =>
+            val namespace = pgNamespace.as[String]
+            val op = pgOp.as[String]
+            cacheOpOID(namespace, op, oid)
+            PGOp(namespace, op)
+
+          case Nil => throw new RuntimeException(s"pg_operator not found: $oid")
+          case other => throw new RuntimeException(s"Expected only two elements, got: $other")
         }
     }
   }
@@ -509,6 +544,11 @@ final class PGConnection(info: PGConnectInfo) {
     oidTypes.update(oid, (namespace, typeName))
   }
 
+  private def cacheOpOID(namespace: String, op: String, oid: OID): Unit = {
+    opOIDs.update((namespace, op), oid)
+    oidOps.update(oid, (namespace, op))
+  }
+
   /** Simple logger if our PGConnectInfo is set to debug. */
   private def log(msg: Any, received: Boolean = false, sent: Boolean = false): Unit = {
     if (info.debug) {
@@ -545,6 +585,8 @@ final class PGConnection(info: PGConnectInfo) {
   private val columnNullables = mutable.Map.empty[(OID, Int), Boolean]
   private val typeOIDs = mutable.Map.empty[(String, String), OID]
   private val oidTypes = mutable.Map.empty[OID, (String, String)]
+  private val opOIDs = mutable.Map.empty[(String, String), OID]
+  private val oidOps = mutable.Map.empty[OID, (String, String)]
   private val tableOIDs = mutable.Map.empty[(String, String), OID]
   private val socket = new Socket()
   private lazy val in: InputStream = new BufferedInputStream(socket.getInputStream, 8192)

@@ -11,9 +11,9 @@ import PGParseDecode.Combinators._
   * This trait can be seen as an analog of Either.
   */
 sealed trait PGParseDecode[+A] {
-  def fold[X](failure: String => X, success: A => X): X = this match {
-    case PGParseDecode.Failure(msg) => failure(msg)
-    case PGParseDecode.Success(v) => success(v)
+  def fold[X](onFailure: String => X, onSuccess: A => X): X = this match {
+    case PGParseDecode.Failure(msg) => onFailure(msg)
+    case PGParseDecode.Success(v) => onSuccess(v)
   }
 
   def map[B](f: A => B): PGParseDecode[B] = this match {
@@ -49,14 +49,21 @@ object PGParseDecode {
     * These are imported at the top of this file to simplify decoding logic.
     */
   object Combinators {
+
+    /** Returns a successful decode with the provided argument. */
+    def success[A](a: A): PGParseDecode[A] = PGParseDecode.Success(a)
+
+    /** Returns a decode failure with the provided error message. */
+    def failure(err: String): PGParseDecode[Nothing] = PGParseDecode.Failure(err)
+
     /** Decodes an object */
     def obj(atom: Atom, name: String): PGParseDecode[Map[String, Atom]] = {
       atom match {
         case o: Atom.Obj =>
           if (o.name == name) {
-            PGParseDecode.Success(o.toMap)
+            success(o.toMap)
           } else {
-            PGParseDecode.Failure(s"Expected object name '$name' but got '${o.name}'")
+            failure(s"Expected object name '$name' but got '${o.name}'")
           }
 
         case other => PGParseDecode.Failure(s"Expected object, got: $other")
@@ -66,8 +73,8 @@ object PGParseDecode {
     /** Gets an Atom from a Map requiring the given key. */
     def get(m: Map[String, Atom], k: String): PGParseDecode[Atom] = {
       m.get(k) match {
-        case None => PGParseDecode.Failure(s"Key not found '$k'")
-        case Some(v) => PGParseDecode.Success(v)
+        case None => failure(s"Key not found '$k'")
+        case Some(v) => success(v)
       }
     }
 
@@ -78,48 +85,48 @@ object PGParseDecode {
 
     /** Decodes an int */
     def int(atom: Atom): PGParseDecode[Int] = atom match {
-      case Atom.Int(n) => PGParseDecode.Success(n)
-      case other => PGParseDecode.Failure(s"Expected int, got: $other")
+      case Atom.Int(n) => success(n)
+      case other => failure(s"Expected int, got: $other")
     }
 
     /** Decodes a boolean */
     def bool(atom: Atom): PGParseDecode[Boolean] = atom match {
-      case Atom.Bool(b) => PGParseDecode.Success(b)
-      case other => PGParseDecode.Failure(s"Expected bool, got: $other")
+      case Atom.Bool(b) => success(b)
+      case other => failure(s"Expected bool, got: $other")
     }
 
     /** Decodes an identifier */
     def ident(atom: Atom): PGParseDecode[String] = atom match {
-      case Atom.Ident(s) => PGParseDecode.Success(s)
-      case other => PGParseDecode.Failure(s"Expected ident, got: $other")
+      case Atom.Ident(s) => success(s)
+      case other => failure(s"Expected ident, got: $other")
     }
 
     def identOrMissing(atom: Atom): PGParseDecode[Option[String]] = atom match {
-      case Atom.Ident(s) => PGParseDecode.Success(Some(s))
-      case Atom.MissingIdent => PGParseDecode.Success(None)
-      case other => PGParseDecode.Failure(s"Expected ident, got: $other")
+      case Atom.Ident(s) => success(Some(s))
+      case Atom.MissingIdent => success(None)
+      case other => failure(s"Expected ident, got: $other")
     }
 
     /** Decodes an OID */
     def oid(atom: Atom): PGParseDecode[OID] = atom match {
-      case Atom.Int(n) if n >= 0 => PGParseDecode.Success(OID(n))
-      case other => PGParseDecode.Failure(s"Expected oid, got: $other")
+      case Atom.Int(n) if n >= 0 => success(OID(n))
+      case other => failure(s"Expected oid, got: $other")
     }
 
     /** Decodes a single character, failing if more than one character is found */
     def char(atom: Atom): PGParseDecode[Char] = atom match {
-      case Atom.Ident(s) if s.length == 1 => PGParseDecode.Success(s.head)
-      case other => PGParseDecode.Failure(s"Expected char, got: $other")
+      case Atom.Ident(s) if s.length == 1 => success(s.head)
+      case other => failure(s"Expected char, got: $other")
     }
 
     /** Repeatedly applies a decoding function within a list atom. */
     def list[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[List[A]] = atom match {
       case Atom.List(xs) => over(f)(xs)
-      case other => PGParseDecode.Failure(s"Expected list, got: $other")
+      case other => failure(s"Expected list, got: $other")
     }
 
     def over[A](f: Atom => PGParseDecode[A])(xs: List[Atom]): PGParseDecode[List[A]] = xs match {
-      case Nil => PGParseDecode.Success(Nil)
+      case Nil => success(Nil)
       case head :: tail => tail.foldLeft(f(head).map(List(_)))((acc, x) =>
         acc.flatMap(ys => f(x).map(ys :+ _))
       )
@@ -128,21 +135,47 @@ object PGParseDecode {
     /** Returns None for a null atom, otherwise applies a decoding function. */
     def nullable[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[Option[A]] = {
       atom match {
-        case Atom.Null => PGParseDecode.Success(None)
+        case Atom.Null => success(None)
         case _ => f(atom).map(Some(_))
       }
     }
 
     /** Decode a null atom to None, failing for non-null atoms. */
     def nul(atom: Atom): PGParseDecode[Option[Nothing]] = atom match {
-      case Atom.Null => PGParseDecode.Success(None)
-      case other => PGParseDecode.Failure(s"Expected null, got: $other")
+      case Atom.Null => success(None)
+      case other => failure(s"Expected null, got: $other")
     }
 
     /** Helper to convert Iso values to their complementary value. */
-    def iso[A <: PartialIso[K], K](c: PartialIsoCompanion[A, K])(k: K): PGParseDecode[A] = c.up(k) match {
-      case None => PGParseDecode.Failure(s"Invalid $c value '$k'")
-      case Some(v) => PGParseDecode.Success(v)
+    def iso[A <: PartialIso[K], K](c: PartialIsoCompanion[A, K])(k: K): PGParseDecode[A] = {
+      c.up(k) match {
+        case None => failure(s"Invalid $c value '$k'")
+        case Some(v) => success(v)
+      }
+    }
+
+    /** Succeeds if condition is true, otherwise returns a decode failure. */
+    def guard(b: Boolean, err: String): PGParseDecode[Unit] = {
+      if (b) success(()) else failure(err)
+    }
+
+    /** Decode a homogeneous 2 element tuple. */
+    def tuple2[A](f: Atom => PGParseDecode[A])(atom: Atom): PGParseDecode[(A, A)] = {
+      tuple2(f, f)(atom)
+    }
+
+    /** Decode a heterogeneous 2 element tuple. */
+    def tuple2[A, B]
+        (f: Atom => PGParseDecode[A], g: Atom => PGParseDecode[B])
+        (atom: Atom)
+        : PGParseDecode[(A, B)] = atom match {
+      case Atom.List(List(x, y)) =>
+        for {
+          a <- f(x)
+          b <- g(y)
+        } yield (a, b)
+
+      case other => failure(s"Expected list of two elems, got: $other")
     }
   }
 }
@@ -173,7 +206,7 @@ final case class Query(
   cteList: Option[Nothing],
   rtable: Option[List[RangeTblEntry]],
   jointree: FromExpr,
-  targetList: List[TargetEntry],
+  targetList: Option[List[TargetEntry]],
   withCheckOptions:  Option[Nothing],
   returningList: Option[Nothing],
   groupClause: Option[Nothing],
@@ -205,7 +238,7 @@ object Query {
       hasForUpdate <- get(o, "hasForUpdate", bool)
       rtable <- get(o, "rtable", nullable(list(RangeTblEntry.decode)))
       jointree <- get(o, "jointree", FromExpr.decode)
-      targetList <- get(o, "targetList", list(TargetEntry.decode))
+      targetList <- get(o, "targetList", nullable(list(TargetEntry.decode)))
       withCheckOptions <- get(o, "withCheckOptions", nul)
       returningList <- get(o, "returningList", nul)
       groupClause <- get(o, "groupClause", nul)
@@ -383,14 +416,14 @@ object Alias {
 
 final case class FromExpr(
   fromlist: Option[List[RangeTblRef]],
-  quals: Option[Nothing]
+  quals: Option[Expr]
 )
 
 object FromExpr {
   def decode(atom: Atom): PGParseDecode[FromExpr] = for {
     o <- obj(atom, "FROMEXPR")
     fromlist <- get(o, "fromlist", nullable(list(RangeTblRef.decode)))
-    quals <- get(o, "quals", nul)
+    quals <- get(o, "quals", nullable(Expr.decode))
   } yield FromExpr(
     fromlist = fromlist,
     quals = quals
@@ -411,8 +444,7 @@ object RangeTblRef {
 }
 
 final case class TargetEntry(
-  expr: Expr,
-  resno: Int,
+  expr: Expr, resno: Int,
   resname: Option[String],
   ressortgroupref: Int,
   resorigtbl: OID,
@@ -444,9 +476,10 @@ object TargetEntry {
 sealed trait Expr
 
 object Expr {
-  def decode(atom: Atom): PGParseDecode[Expr] = {
-    Var.decode(atom) | Const.decode(atom)
-  }
+  def decode(atom: Atom): PGParseDecode[Expr] = (
+    Var.decode(atom) | Const.decode(atom) | Param.decode(atom) | BoolExpr.decode(atom)
+      | OpExpr.decode(atom)
+  )
 }
 
 sealed case class Var(
@@ -512,4 +545,92 @@ object Const {
     // constbyval = constbyval,
     constisnull = constisnull
   )
+}
+
+final case class Param(
+  paramkind: ParamKind,
+  paramid: Int,
+  paramtype: OID
+  // paramtypmod
+  // paramcollid
+  // location
+) extends Expr
+
+object Param {
+  def decode(atom: Atom): PGParseDecode[Param] = for {
+    o <- obj(atom, "PARAM")
+    paramkind <- get(o, "paramkind", int).flatMap(iso(ParamKind))
+    paramid <- get(o, "paramid", int)
+    paramtype <- get(o, "paramtype", oid)
+  } yield Param(
+    paramkind = paramkind,
+    paramid = paramid,
+    paramtype = paramtype
+  )
+}
+
+sealed abstract class ParamKind(val down: Int) extends PartialIso[Int]
+object ParamKind extends PartialIsoCompanion[ParamKind, Int] {
+  case object Extern extends ParamKind(0)
+  case object Exec extends ParamKind(1)
+  case object SubLink extends ParamKind(2)
+
+  override def values: List[ParamKind] = List(Extern, Exec, SubLink)
+}
+
+final case class OpExpr(
+  opno: OID,
+  // opfuncid: OID,
+  //  opresulttype: OID,
+  // opretset: Boolean,
+  // opcollid
+  // inputcollid
+  args: (Expr, Expr)
+  // location
+) extends Expr
+
+object OpExpr {
+  def decode(atom: Atom): PGParseDecode[OpExpr] = for {
+    o <- obj(atom, "OPEXPR")
+    opno <- get(o, "opno", oid)
+    args <- get(o, "args", tuple2(Expr.decode))
+  } yield OpExpr(
+    opno = opno,
+    args = args
+  )
+}
+
+/**
+  * NOTE: The BoolExpr implementations don't directly represent their AST counterparts.
+  * This is for the sake of simplicity.  BoolExpr directly translated would look like this -
+  *
+  * final case class BoolExpr(boolop: BoolExprType, args: List[Expr])
+  *
+  * However, this is problematic since different BoolExprs have different args sizes, so
+  * we can't use something like args: (Expr, Expr).  Instead, our implementations will
+  * attempt to be more user friendly by having different interfaces.
+  */
+sealed trait BoolExpr extends Expr
+final case class AndExpr(args: (Expr, Expr)) extends BoolExpr
+final case class OrExpr(args: (Expr, Expr)) extends BoolExpr
+final case class NotExpr(arg: Expr) extends BoolExpr
+
+object BoolExpr {
+  def decode(atom: Atom): PGParseDecode[BoolExpr] = for {
+    o <- obj(atom, "BOOLEXPR")
+    boolop <- get(o, "boolop", ident)
+    boolExpr <- fromBoolOp(o, boolop)
+  } yield boolExpr
+
+  private def fromBoolOp(o: Map[String, PGParser.Atom], boolop: String) = boolop match {
+    case "and" | "or" =>
+      val cons = if (boolop == "and") AndExpr(_) else OrExpr(_)
+      get(o, "args", tuple2(Expr.decode)).map(cons)
+
+    case "not" =>
+      get(o, "args", list(Expr.decode)).flatMap {
+        case List(arg) => success(NotExpr(arg))
+        case other => failure(s"Expected list of one element, got: $other")
+      }
+  }
 }
