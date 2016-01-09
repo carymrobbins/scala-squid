@@ -2,6 +2,7 @@ package squid.macros
 
 import scala.annotation.StaticAnnotation
 import scala.language.experimental.macros
+import scala.reflect.internal.util.OffsetPosition
 import scala.reflect.macros.whitebox
 
 import com.typesafe.config.ConfigFactory
@@ -99,16 +100,28 @@ object Query {
 
     def buildSQLForJDBC(parts: List[String]): String = parts.mkString("?")
 
-    def formatError(err: PGResponse.Error, sql: String): String = {
-      val msg = err.getMessageForSQL(sql)
-      val indented = msg.split('\n').map("  " + _).mkString("\n")
-      s"\nPostgreSQL Error:\n$indented\nScala source:"
+    // Attempt to find the actual source position of the error inside the SQL statement.
+    def handleError(err: PGResponse.Error, sql: String): Nothing = err.response match {
+      case Some(r) if r.getPosition.isDefined =>
+        val pos = r.getPosition.get
+        val sourceChars = c.enclosingPosition.source.content
+        var quoteCount = 0
+        var i = c.enclosingPosition.start
+        while (i < c.enclosingPosition.source.length && quoteCount < 3) {
+          if (sourceChars(i) == '"') quoteCount += 1
+          i += 1
+        }
+        val sqlPos = i + pos - 1
+        val newPos = new OffsetPosition(c.enclosingPosition.source, sqlPos)
+        c.abort(newPos.asInstanceOf[c.Position], "\nPostgreSQL: " + r.getMessage)
+
+      case _ => c.abort(c.enclosingPosition, err.message)
     }
 
     def getRetVals(conn: PGConnection, sql: String): List[RetVal] = {
       // TODO: Get types of passed params
       conn.query.describe(sql, types = Nil).successOr(err =>
-        c.abort(c.enclosingPosition, formatError(err, sql))
+        handleError(err, sql)
       ).columns.map { col =>
         val typeName = conn.types.getName(col.colType).getOrElse {
           c.abort(c.enclosingPosition,

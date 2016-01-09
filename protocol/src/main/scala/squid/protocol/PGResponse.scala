@@ -35,12 +35,10 @@ object PGResponse {
 
   final case class Error(
     message: String,
-    er: Option[PGBackendMessage.ErrorResponse] = None
-  ) extends PGResponse[Nothing] {
-    def getMessageForSQL(sql: String): String = er.map(_.getMessageForSQL(sql)).getOrElse(message)
-  }
+    response: Option[PGBackendMessage.ErrorResponse] = None
+  ) extends PGResponse[Nothing]
 
-  def fromErrorResponse(er: PGBackendMessage.ErrorResponse): Error = {
-    Error(er.getMessage, Some(er))
+  def fromErrorResponse(response: PGBackendMessage.ErrorResponse): Error = {
+    Error(response.getMessage, Some(response))
   }
 }

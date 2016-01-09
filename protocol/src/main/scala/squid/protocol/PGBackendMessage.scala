@@ -27,40 +27,21 @@ object PGBackendMessage {
   sealed case class RowDescription(columns: List[ColDescription]) extends PGBackendMessage
 
   sealed case class ErrorResponse(messageFields: MessageFields) extends PGBackendMessage {
+    lazy val getError: Option[String] = messageFields.toMap.get('M')
+    lazy val getHint: Option[String] = messageFields.toMap.get('H')
+    lazy val getPosition: Option[Int] = messageFields.toMap.get('P').map(_.toInt)
+
     /** Attempts to get the error message from messageFields, otherwise uses toString */
     lazy val getMessage: String = {
-      messageFields.toMap.get('M').map { m =>
-        val hint = messageFields.toMap.get('H').map(h => s"\nHINT: $h").getOrElse("")
-        s"ERROR: $m" + hint
-      }.getOrElse(toString)
-    }
-
-    /** Pretty print error messages for SQL statements.  */
-    def getMessageForSQL(sql: String): String = {
-      val sqlMessage = messageFields.toMap.get('P').flatMap { p =>
-        try {
-          Some(p.toInt)
-        } catch {
-          case _: NumberFormatException => None
-        }
-      }.map { pos =>
-        // Extract the appropriate line from the SQL
-        val mbStart = sql.lastIndexOf('\n', pos)
-        val start = if (mbStart == -1) 0 else mbStart + 1
-        val mbEnd = sql.indexOf('\n', pos)
-        val end = if (mbEnd == -1) sql.length - 1 else mbEnd
-        if (end < 0) {
-          ""
-        } else {
-          val sqlLine = sql.substring(start, end)
-          val caret = (" " * (pos - start - 1)) + "^"
-          s"\nSQL: $sqlLine\n     $caret"
-        }
-      }.getOrElse("")
-      getMessage + sqlMessage
+      List(
+        getError.map("ERROR: " + _),
+        getHint.map("HINT: " + _)
+      ).flatten match {
+        case Nil => toString
+        case xs => xs.mkString("\n")
+      }
     }
   }
-
 
   /** Decode a backend message from binary. */
   def decode(r: BinaryReader): PGBackendMessage = {
