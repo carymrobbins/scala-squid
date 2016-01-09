@@ -42,11 +42,6 @@ final case class DescribeResult(
 /** Result column metadata returned from a 'describe' command. */
 final case class DescribeColumn(name: String, colType: OID, nullable: Boolean)
 
-// TODO: Replace with PGType
-final case class PGTypeName(namespace: String, typeName: String)
-
-final case class PGOp(namespace: String, op: String)
-
 /** The exception class raised from PGConnection upon protocol errors. */
 final case class PGProtocolError(msg: PGBackendMessage.ErrorResponse) extends Exception {
   override def getMessage: String = msg.toString

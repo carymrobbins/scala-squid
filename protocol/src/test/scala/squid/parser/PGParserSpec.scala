@@ -3,7 +3,7 @@ package squid.parser
 import com.typesafe.config.ConfigFactory
 import org.specs2._
 import org.specs2.matcher.MatchResult
-import squid.protocol.{PGConnection, OID, PGConnectInfo, PGProtocol}
+import squid.protocol._
 
 /** Tests for consuming parse trees from PostgreSQL. */
 class PGParserSpec extends Specification { def is = s2"""
@@ -27,7 +27,7 @@ class PGParserSpec extends Specification { def is = s2"""
       rtable = Some(List(
         defaultRangeTblEntry.copy(
           eref = Some(Alias(aliasname = "bar", colnames = Some(List("id", "quux")))),
-          relid = tableOID(c, "foo", "bar")
+          relid = c.tables.getOID("foo", "bar").get
         )
       )),
       jointree = FromExpr(
@@ -39,26 +39,26 @@ class PGParserSpec extends Specification { def is = s2"""
           expr = Var(
             varno = 1,
             varattno = 1,
-            vartype = c.getTypeOID("pg_catalog", "int4"),
+            vartype = c.types.getOID("pg_catalog", "int4").get,
             varlevelsup = 0
           ),
           resno = 1,
           resname = Some("id"),
           ressortgroupref = 0,
-          resorigtbl = tableOID(c, "foo", "bar"),
+          resorigtbl = c.tables.getOID("foo", "bar").get,
           resorigcol = 1
         ),
         TargetEntry(
           expr = Var(
             varno = 1,
             varattno = 2,
-            vartype = c.getTypeOID("pg_catalog", "text"),
+            vartype = c.types.getOID("pg_catalog", "text").get,
             varlevelsup = 0
           ),
           resno = 2,
           resname = Some("quux"),
           ressortgroupref = 0,
-          resorigtbl = tableOID(c, "foo", "bar"),
+          resorigtbl = c.tables.getOID("foo", "bar").get,
           resorigcol = 2
         )
       ))
@@ -72,7 +72,7 @@ class PGParserSpec extends Specification { def is = s2"""
       targetList = Some(List(
         TargetEntry(
           expr = Const(
-            consttype = c.getTypeOID("pg_catalog", "int4"),
+            consttype = c.types.getOID("pg_catalog", "int4").get,
             constisnull = false
           ),
           resno = 1,
@@ -84,7 +84,7 @@ class PGParserSpec extends Specification { def is = s2"""
         TargetEntry(
           expr = Const(
             // text literals are typed as unknown
-            consttype = c.getTypeOID("pg_catalog", "numeric"),
+            consttype = c.types.getOID("pg_catalog", "numeric").get,
             constisnull = false
           ),
           resno = 2,
@@ -95,7 +95,7 @@ class PGParserSpec extends Specification { def is = s2"""
         ),
         TargetEntry(
           expr = Const(
-            consttype = c.getTypeOID("pg_catalog", "unknown"),
+            consttype = c.types.getOID("pg_catalog", "unknown").get,
             constisnull = false
           ),
           resno = 3,
@@ -107,7 +107,7 @@ class PGParserSpec extends Specification { def is = s2"""
 
         TargetEntry(
           expr = Const(
-            consttype = c.getTypeOID("pg_catalog", "bool"),
+            consttype = c.types.getOID("pg_catalog", "bool").get,
             constisnull = false
           ),
           resno = 4,
@@ -118,7 +118,7 @@ class PGParserSpec extends Specification { def is = s2"""
         ),
         TargetEntry(
           expr = Const(
-            consttype = c.getTypeOID("pg_catalog", "unknown"),
+            consttype = c.types.getOID("pg_catalog", "unknown").get,
             constisnull = true
           ),
           resno = 5,
@@ -139,19 +139,19 @@ class PGParserSpec extends Specification { def is = s2"""
     val whereExpr = result.jointree.quals.get.asInstanceOf[OpExpr]
 
     sequence(
-      c.getOpName(whereExpr.opno).op === "=",
+      c.operators.getName(whereExpr.opno) === Some(PGOperatorName("pg_catalog", "=")),
 
       whereExpr.args._1 === Var(
         varno = 1,
         varattno = 1,
-        vartype = c.getTypeOID("pg_catalog", "int4"),
+        vartype = c.types.getOID("pg_catalog", "int4").get,
         varlevelsup = 0
       ),
 
       whereExpr.args._2 === Param(
         paramkind = ParamKind.Extern,
         paramid = 1,
-        paramtype = c.getTypeOID("pg_catalog", "int4")
+        paramtype = c.types.getOID("pg_catalog", "int4").get
       )
     )
   }
@@ -205,7 +205,7 @@ class PGParserSpec extends Specification { def is = s2"""
   def sequence[T](ms: MatchResult[T]*): MatchResult[Seq[T]] = MatchResult.sequence(ms)
 
   private def parse(c: PGConnection, sql: String, types: List[OID] = Nil): Query = {
-    val parseTree = c.describe(sql, types).parseTree
+    val parseTree = c.query.describe(sql, types).parseTree
     val result = PGParser.parse(parseTree) match {
       case PGParser.Success(r, _) => r
       case e: PGParser.NoSuccess =>
@@ -215,12 +215,6 @@ class PGParserSpec extends Specification { def is = s2"""
       e => throw new RuntimeException(s"Query.decode error: $e\n\nFull parse tree: $parseTree"),
       identity
     )
-  }
-
-  private def tableOID(c: PGConnection, schema: String, table: String): OID = {
-    c.getTableOID(schema, table).getOrElse {
-      throw new RuntimeException("No oid found for foo.bar")
-    }
   }
 
   private val defaultQuery = Query(

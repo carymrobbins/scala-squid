@@ -7,7 +7,7 @@ object build extends Build {
   val buildSettings = Defaults.coreDefaultSettings ++ Seq(
     version := "0.1.0",
     scalaVersion := "2.11.7",
-    scalacOptions ++= Seq(),
+    scalacOptions ++= Seq("-unchecked", "-deprecation", "-feature", "-Xfatal-warnings"),
     scalacOptions in Test ++= Seq("-Yrangepos"),
     crossScalaVersions := Seq("2.10.2", "2.10.3", "2.10.4", "2.10.5", "2.10.6", "2.11.0", "2.11.1", "2.11.2", "2.11.3", "2.11.4", "2.11.5", "2.11.6", "2.11.7"),
     resolvers += Resolver.sonatypeRepo("snapshots"),

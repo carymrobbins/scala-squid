@@ -12,20 +12,20 @@ class PGProtocolSpec extends Specification { def is = s2"""
   """
 
   def startUp = withConnection { c =>
-    c.getState === PGState.Idle
+    c.state === PGState.Idle
   }
 
   def describe = withConnection { c =>
-    val result = c.describe("select * from foo.bar", Nil)
+    val result = c.query.describe("select * from foo.bar", Nil)
     result.paramTypes === Nil and
       result.columns === List(
-        DescribeColumn("id", c.getTypeOID[Int](), nullable = false),
-        DescribeColumn("quux", c.getTypeOID[String](), nullable = true)
+        DescribeColumn("id", c.types.getOID[Int](), nullable = false),
+        DescribeColumn("quux", c.types.getOID[String](), nullable = true)
       )
   }
 
   def preparedQuery = withConnection { c =>
-    c.preparedQuery("select * from foo.bar", Nil, Nil).toList === List(
+    c.query.prepared("select * from foo.bar", Nil, Nil) === List(
       List(PGValue.Text("1"), PGValue.Text("alpha")),
       List(PGValue.Text("2"), PGValue.Null),
       List(PGValue.Text("3"), PGValue.Text("charlie"))
@@ -33,11 +33,11 @@ class PGProtocolSpec extends Specification { def is = s2"""
   }
 
   def getTypeName = withConnection { c =>
-    val cols = c.describe("select * from foo.bar", Nil).columns
-    val typeNames = cols.map(col => c.getTypeName(col.colType))
+    val cols = c.query.describe("select * from foo.bar", Nil).columns
+    val typeNames = cols.map(col => c.types.getName(col.colType))
     typeNames === List(
-      PGTypeName("pg_catalog", "int4"),
-      PGTypeName("pg_catalog", "text")
+      Some(PGTypeName("pg_catalog", "int4")),
+      Some(PGTypeName("pg_catalog", "text"))
     )
   }
 

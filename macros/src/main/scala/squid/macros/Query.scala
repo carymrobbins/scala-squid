@@ -101,9 +101,18 @@ object Query {
 
     def getRetVals(conn: PGConnection, sql: String): List[RetVal] = {
       // TODO: Get types of passed params
-      conn.describe(sql, types = Nil).columns.map(col =>
-        RetVal(col.name, conn.getTypeName(col.colType), col.nullable)
-      )
+      conn.query.describe(sql, types = Nil).columns.map { col =>
+        val typeName = conn.types.getName(col.colType).getOrElse {
+          c.abort(c.enclosingPosition,
+            s"Type not found for oid ${col.colType} for column $col"
+          )
+        }
+        RetVal(
+          col.name,
+          typeName,
+          col.nullable
+        )
+      }
     }
 
     def getRowCtorArgs(retVals: List[RetVal]): List[ValDef] = {
