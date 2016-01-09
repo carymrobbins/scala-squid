@@ -11,7 +11,7 @@ import squid.util.StreamAssertions
 final class PGQueryExecutor(socket: PGSocket) {
 
   /** Describes a prepared statement given its SQL string and parameter types (optional). */
-  def describe(sql: String, types: List[OID]): DescribeResult = {
+  def describe(sql: String, types: List[OID]): PGResponse[DescribeResult] = {
     socket.sync()
     socket.send(Parse("", sql, types))
     socket.send(Describe(""))
@@ -20,36 +20,38 @@ final class PGQueryExecutor(socket: PGSocket) {
     socket.flush()
 
     @tailrec
-    def waitForParseTree(): String = socket.receive() match {
-      case Some(NoticeResponse(fields)) =>
-        fields.toMap.get('D') match {
-          case Some(result) => result // Found parse tree
-          case None => waitForParseTree() // Ignore and recurse, waiting for parse tree
-        }
+    def waitForParseTree(): PGResponse[String] = socket.receive() match {
+      case err: PGResponse.Error => err
 
-      case Some(err: ErrorResponse) => throw PGProtocolError(err)
-      case other => throw new RuntimeException(s"Expected NoticeResponse, got: $other")
+      case PGResponse.Success(x) =>
+        x match {
+          case Some(NoticeResponse(fields)) =>
+            fields.toMap.get('D') match {
+              case Some(result) => PGResponse.Success(result) // Found parse tree
+              case None => waitForParseTree() // Ignore and recurse, waiting for parse tree
+            }
+
+          case other => PGResponse.Error(s"Expected NoticeResponse during describe, got: $other")
+        }
     }
 
-    val parseTree = waitForParseTree()
-    socket.receive() match {
-      case Some(ParseComplete) => // Skip
-      case other => throw new RuntimeException(s"Expected ParseComplete, got: $other")
-    }
-    val paramTypes = socket.receive() match {
-      case Some(ParameterDescription(pts)) => pts
-      case other => throw new RuntimeException(s"Expected ParameterDescription, got: $other")
-    }
-    val cols = socket.receive() match {
-      case Some(NoData) => List()
-      case Some(RowDescription(cds)) =>
-        cds.map { cd =>
-          val nullable = columnIsNullable(cd.table, cd.number)
-          DescribeColumn(cd.name, cd.colType, nullable)
-        }
-      case other => throw new RuntimeException(s"Expected RowDescription, got: $other")
-    }
-    DescribeResult(paramTypes, cols, parseTree)
+    for {
+      parseTree <- waitForParseTree()
+      _ <- socket.receive().collect("Expected ParseComplete") {
+        case Some(ParseComplete) =>
+      }
+      paramTypes <- socket.receive().collect("Expected ParameterDescription") {
+        case Some(ParameterDescription(pts)) => pts
+      }
+      cols <- socket.receive().collect("Expected NoData or RowDescription") {
+        case Some(NoData) => Nil
+        case Some(RowDescription(cds)) =>
+          cds.map { cd =>
+            val nullable = columnIsNullable(cd.table, cd.number)
+            DescribeColumn(cd.name, cd.colType, nullable)
+          }
+      }
+    } yield DescribeResult(paramTypes, cols, parseTree)
   }
 
   /** Executes a prepared query and returns its results int a list. */
@@ -62,7 +64,13 @@ final class PGQueryExecutor(socket: PGSocket) {
     socket.send(Sync)
     socket.flush()
     new Iterator[List[PGValue]] {
-      private var nextMsg = socket.receive()
+      // NOTE: There doesn't seem to be a way around throwing an exception here if we
+      // get an ErrorResponse unless we return a List instead of a Stream.  If we
+      // do get an ErrorResponse while traversing the result set, this seems rather exceptional
+      // and unexpected, so throwing an exception might be the best bet either way.
+      private def receiveNext() = socket.receive().getOrThrow
+
+      private var nextMsg = receiveNext()
 
       override def hasNext: Boolean = nextMsg match {
         case Some(EmptyQueryResponse) => false
@@ -72,7 +80,7 @@ final class PGQueryExecutor(socket: PGSocket) {
 
       override def next(): List[PGValue] = nextMsg match {
         case Some(DataRow(values)) =>
-          nextMsg = socket.receive()
+          nextMsg = receiveNext()
           values
 
         case other => throw new RuntimeException(s"Unexpected row message: $other")
@@ -81,7 +89,7 @@ final class PGQueryExecutor(socket: PGSocket) {
   }
 
   /** Binds a prepared statement. */
-  private def bind(query: String, params: List[PGParam], binaryCols: List[Boolean]): Unit = {
+  private def bind(query: String, params: List[PGParam], binaryCols: List[Boolean]): PGResponse[Unit] = {
     socket.sync()
     val paramTypes = params.flatMap(_.typeOID)
     val key = (query, paramTypes)
@@ -95,14 +103,22 @@ final class PGQueryExecutor(socket: PGSocket) {
     socket.send(Flush) // TODO: Why do we have to send a Flush here?
     socket.flush()
 
-    while (true) {
-      socket.receive() match {
-        case Some(ParseComplete) => preparedStatements.update(key, id)
-        case Some(_: NoticeResponse) => // Parse tree, ignored.
-        case Some(BindComplete) => return
-        case other => throw new RuntimeException(s"Unexpected response: $other")
-      }
+    @tailrec
+    def loop(): PGResponse[Unit] = socket.receive() match {
+      case err: PGResponse.Error => err
+
+      case PGResponse.Success(x) =>
+        x match {
+          case Some(ParseComplete) =>
+            preparedStatements.update(key, id)
+            loop()
+
+          case Some(_: NoticeResponse) => loop() // Parse tree, ignored.
+          case Some(BindComplete) => PGResponse.Success(())
+          case other => PGResponse.Error(s"Unexpected response during bind: $other")
+        }
     }
+    loop()
   }
 
   /** Infers column nullability by checking the pg_attribute table. */

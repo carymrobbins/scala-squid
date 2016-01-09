@@ -26,7 +26,12 @@ final class PGSocket(info: PGConnectInfo, stateMgr: PGStateManager, logger: PGLo
   def flush(): Unit = out.flush()
 
   /** Attempts to receive a low-level message from the backend. */
-  def receive(): Option[PGBackendMessage] = {
+  def receive(): PGResponse[Option[PGBackendMessage]] = rawReceive() match {
+    case Some(err: PGBackendMessage.ErrorResponse) => PGResponse.fromErrorResponse(err)
+    case other => PGResponse.Success(other)
+  }
+
+  private def rawReceive(): Option[PGBackendMessage] = {
     val r = new BinaryReader(in, PGProtocol.CHARSET)
     if (r.peek() == -1) {
       None
@@ -52,15 +57,20 @@ final class PGSocket(info: PGConnectInfo, stateMgr: PGStateManager, logger: PGLo
 
   /** Called by .sync to wait until we are synced with the backend. */
   @tailrec
-  private def syncWait(): Unit = {
+  private def syncWait(): PGResponse[Unit] = {
     receive() match {
-      case None =>
-        send(PGFrontendMessage.Sync)
-        flush()
-        syncWait()
+      case err: PGResponse.Error => err
 
-      case Some(_: PGBackendMessage.ReadyForQuery) => // Done
-      case Some(msg) => throw new RuntimeException(s"Unexpected message during sync: $msg")
+      case PGResponse.Success(x) =>
+        x match {
+          case None =>
+            send(PGFrontendMessage.Sync)
+            flush()
+            syncWait()
+
+          case Some(_: PGBackendMessage.ReadyForQuery) => PGResponse.Success(()) // Done
+          case Some(msg) => PGResponse.Error(s"Unexpected message during sync: $msg")
+        }
     }
   }
 

@@ -44,11 +44,9 @@ final class PGConnection(info: PGConnectInfo) {
   private def readStartupMessages(): Unit = {
     @tailrec
     def loop(): Unit = {
-      socket.receive().getOrElse {
+      socket.receive().getOrThrow.getOrElse {
         throw new RuntimeException("No message received from backend")
       } match {
-        case err: ErrorResponse => throw PGProtocolError(err)
-
         case msg: ParameterStatus =>
           paramStatusMgr.update(msg)
           loop()
@@ -99,11 +97,9 @@ final class PGConnection(info: PGConnectInfo) {
   private def doAuth(): Unit = {
     @tailrec
     def loop(): Unit = {
-      socket.receive().getOrElse {
+      socket.receive().getOrThrow.getOrElse {
         throw new RuntimeException("No message received from backend")
       } match {
-        case err: ErrorResponse => throw PGProtocolError(err)
-
         case msg@AuthenticationMD5Password(salt) =>
           socket.send(PasswordMessage(encodePassword(salt)))
           socket.flush()

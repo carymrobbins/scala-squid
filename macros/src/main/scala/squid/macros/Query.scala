@@ -99,9 +99,17 @@ object Query {
 
     def buildSQLForJDBC(parts: List[String]): String = parts.mkString("?")
 
+    def formatError(err: PGResponse.Error, sql: String): String = {
+      val msg = err.getMessageForSQL(sql)
+      val indented = msg.split('\n').map("  " + _).mkString("\n")
+      s"\nPostgreSQL Error:\n$indented\nScala source:"
+    }
+
     def getRetVals(conn: PGConnection, sql: String): List[RetVal] = {
       // TODO: Get types of passed params
-      conn.query.describe(sql, types = Nil).columns.map { col =>
+      conn.query.describe(sql, types = Nil).successOr(err =>
+        c.abort(c.enclosingPosition, formatError(err, sql))
+      ).columns.map { col =>
         val typeName = conn.types.getName(col.colType).getOrElse {
           c.abort(c.enclosingPosition,
             s"Type not found for oid ${col.colType} for column $col"

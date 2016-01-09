@@ -43,6 +43,14 @@ final case class DescribeResult(
 final case class DescribeColumn(name: String, colType: OID, nullable: Boolean)
 
 /** The exception class raised from PGConnection upon protocol errors. */
-final case class PGProtocolError(msg: PGBackendMessage.ErrorResponse) extends Exception {
-  override def getMessage: String = msg.toString
+final case class PGProtocolError(override val getMessage: String) extends Exception
+
+object PGProtocolError {
+  def fromErrorResponse(err: PGBackendMessage.ErrorResponse): PGProtocolError = {
+    PGProtocolError(err.getMessage)
+  }
+
+  def fromPGResponseError(err: PGResponse.Error): PGProtocolError = {
+    PGProtocolError(err.toString)
+  }
 }

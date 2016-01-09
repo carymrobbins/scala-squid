@@ -9,6 +9,7 @@ class PGProtocolSpec extends Specification { def is = s2"""
     describe $describe
     preparedQuery $preparedQuery
     getTypeName $getTypeName
+    syntaxError $syntaxError
   """
 
   def startUp = withConnection { c =>
@@ -16,7 +17,7 @@ class PGProtocolSpec extends Specification { def is = s2"""
   }
 
   def describe = withConnection { c =>
-    val result = c.query.describe("select * from foo.bar", Nil)
+    val result = c.query.describe("select * from foo.bar", Nil).getOrThrow
     result.paramTypes === Nil and
       result.columns === List(
         DescribeColumn("id", c.types.getOID[Int](), nullable = false),
@@ -33,12 +34,16 @@ class PGProtocolSpec extends Specification { def is = s2"""
   }
 
   def getTypeName = withConnection { c =>
-    val cols = c.query.describe("select * from foo.bar", Nil).columns
+    val cols = c.query.describe("select * from foo.bar", Nil).getOrThrow.columns
     val typeNames = cols.map(col => c.types.getName(col.colType))
     typeNames === List(
       Some(PGTypeName("pg_catalog", "int4")),
       Some(PGTypeName("pg_catalog", "text"))
     )
+  }
+
+  def syntaxError = withConnection { c =>
+    c.query.describe("select 1 from 2", Nil) must beAnInstanceOf[PGResponse.Error]
   }
 
   private def withConnection[A](block: PGConnection => A): A = {

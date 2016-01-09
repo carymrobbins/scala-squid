@@ -205,7 +205,7 @@ class PGParserSpec extends Specification { def is = s2"""
   def sequence[T](ms: MatchResult[T]*): MatchResult[Seq[T]] = MatchResult.sequence(ms)
 
   private def parse(c: PGConnection, sql: String, types: List[OID] = Nil): Query = {
-    val parseTree = c.query.describe(sql, types).parseTree
+    val parseTree = c.query.describe(sql, types).getOrThrow.parseTree
     val result = PGParser.parse(parseTree) match {
       case PGParser.Success(r, _) => r
       case e: PGParser.NoSuccess =>
